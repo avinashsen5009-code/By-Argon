@@ -64,6 +64,10 @@ jobs:
               npm install --no-audit --no-fund "$pkg"
             fi
           done
+          # The Capacitor CLI needs TypeScript 5.x to read capacitor.config.ts.
+          # Newer/missing versions cause "Cannot read properties of
+          # undefined (reading 'CommonJS')". --no-save keeps package.json clean.
+          npm install --no-save --no-audit --no-fund typescript@5
           npx cap --version
 
       # Capacitor 7+ needs JDK 21; older versions work with 17.
