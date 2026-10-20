@@ -1,0 +1,105 @@
+@font-face {
+  font-family: 'Sora';
+  src: url('/fonts/Sora-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Sora';
+  src: url('/fonts/Sora-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Sora';
+  src: url('/fonts/Sora-800.woff2') format('woff2');
+  font-weight: 800;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Inter';
+  src: url('/fonts/Inter-800.woff2') format('woff2');
+  font-weight: 800;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Noto Sans Devanagari';
+  src: url('/fonts/NotoSansDevanagari-600.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Noto Sans Devanagari';
+  src: url('/fonts/NotoSansDevanagari-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Noto Sans Devanagari';
+  src: url('/fonts/NotoSansDevanagari-800.woff2') format('woff2');
+  font-weight: 800;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: 'Noto Color Emoji';
+  src: url('/fonts/NotoColorEmoji.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+:root {
+  --rs-bg: #0b0d12;
+  --rs-surface: #131720;
+  --rs-surface-elevated: #1b202c;
+  --rs-border: rgba(255, 255, 255, 0.09);
+  --rs-ink: #f4f6fa;
+  --rs-muted: #9ba3b5;
+  --rs-accent: #17a4db;
+  --rs-accent-strong: #2ee59d;
+  --rs-warn: #ff5a5f;
+  --font-display: 'Sora', 'Noto Color Emoji', sans-serif;
+  --font-sans: 'Inter', 'Noto Sans Devanagari', 'Noto Color Emoji', sans-serif;
+}
+
+body {
+  background-color: var(--rs-bg);
+  color: var(--rs-ink);
+  font-family: var(--font-sans);
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

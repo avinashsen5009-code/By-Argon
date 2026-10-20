@@ -1,0 +1,130 @@
+{
+  "recipe": "v3.1",
+  "meta": {
+    "w": 1920,
+    "h": 1080,
+    "fps": 30,
+    "duration": 300.0,
+    "lang": "en",
+    "part": { "n": 1, "of": 8, "from": 0, "to": 300.0 }
+  },
+  "theme": { "palette": 4 },
+  "global": { "vignette": 0.5 },
+  "defs": {
+    "stepPill": {
+      "params": { "title": "MODULE", "tone": "acc" },
+      "layers": [
+        {
+          "id": "sp_bg",
+          "type": "shape",
+          "kind": "pill",
+          "x": 0.5,
+          "y": 0.5,
+          "w": 420,
+          "h": 76,
+          "style": "card",
+          "stroke": "@acc",
+          "strokeWidth": 2
+        },
+        {
+          "id": "sp_txt",
+          "type": "text",
+          "x": 0.5,
+          "y": 0.5,
+          "w": 380,
+          "text": "$title",
+          "size": 30,
+          "font": "sans",
+          "weight": 700,
+          "color": "@ink"
+        }
+      ]
+    }
+  },
+  "camera": [
+    { "t": 0, "x": 0.5, "y": 0.5, "zoom": 1.04 },
+    { "t": 0.5, "x": 0.5, "y": 0.5, "zoom": 1.0, "e": "outCubic" },
+    { "t": 60, "x": 0.51, "y": 0.5, "zoom": 1.02, "e": "inOutSine" },
+    { "t": 120, "x": 0.49, "y": 0.5, "zoom": 1.02, "e": "inOutSine" },
+    { "t": 180, "x": 0.5, "y": 0.51, "zoom": 1.03, "e": "inOutSine" },
+    { "t": 240, "x": 0.5, "y": 0.49, "zoom": 1.02, "e": "inOutSine" },
+    { "t": 300, "x": 0.5, "y": 0.5, "zoom": 1.0, "e": "inOutSine" }
+  ],
+  "scenes": [
+    {
+      "id": "m_s1",
+      "t": [0, 38.0],
+      "layers": [
+        { "id": "hdr_persist", "type": "use", "def": "badge", "t": [0.2, 300.0], "exit": "none", "args": { "x": 0.14, "y": 0.1, "text": "5 MIN MASTER", "tone": "acc", "at": 0.2 } },
+        { "id": "m1_h", "type": "text", "t": [0.3, 38.0], "x": 0.5, "y": 0.22, "w": 1300, "text": "Part 1: Architecture Foundation", "size": 78, "weight": 800, "color": "@ink", "enter": "charIn" },
+        { "id": "m1_c", "type": "shape", "kind": "card", "style": "hero", "t": [0.8, 38.0], "x": 0.5, "y": 0.56, "w": 1100, "h": 480, "motion": [{ "m": "pop", "at": 0.8 }] },
+        { "id": "m1_cnt", "type": "chart", "kind": "counter", "t": [1.2, 38.0], "x": 0.5, "y": 0.56, "from": 0, "to": 38, "format": "{v}s Part 1", "size": 110, "count": [1.2, 37.5], "color": "@acc", "motion": [{ "m": "pop", "at": 1.2 }] }
+      ]
+    },
+    {
+      "id": "m_s2",
+      "t": [38.0, 76.0],
+      "layers": [
+        { "id": "m2_h", "type": "text", "t": [38.2, 76.0], "x": 0.5, "y": 0.22, "w": 1300, "text": "Part 2: Transcript Anchors", "size": 78, "weight": 800, "color": "@ink", "enter": "charIn" },
+        { "id": "m2_tl", "type": "use", "def": "timeline", "t": [38.8, 76.0], "args": { "x": 0.5, "y": 0.56, "w": 1100, "nodes": ["Words", "Sentences", "Anchors", "Compiled"], "at": 38.8, "dur": 4.0, "finalTone": "acc" } },
+        { "id": "m2_cnt", "type": "chart", "kind": "counter", "t": [39.2, 76.0], "x": 0.5, "y": 0.78, "from": 38, "to": 76, "format": "{v}s Elapsed", "size": 72, "count": [39.2, 75.5], "color": "@ink", "motion": [{ "m": "pop", "at": 39.2 }] }
+      ]
+    },
+    {
+      "id": "m_s3",
+      "t": [76.0, 114.0],
+      "layers": [
+        { "id": "m3_h", "type": "text", "t": [76.2, 114.0], "x": 0.5, "y": 0.22, "w": 1300, "text": "Part 3: Motion Macros", "size": 78, "weight": 800, "color": "@ink", "enter": "charIn" },
+        { "id": "m3_p1", "type": "use", "def": "stepPill", "t": [76.8, 114.0], "args": { "x": 0.3, "y": 0.52, "title": "POP & SLAM", "at": 76.8 } },
+        { "id": "m3_p2", "type": "use", "def": "stepPill", "t": [77.4, 114.0], "args": { "x": 0.7, "y": 0.52, "title": "ORBIT & ARC", "at": 77.4 } },
+        { "id": "m3_cnt", "type": "chart", "kind": "counter", "t": [77.8, 114.0], "x": 0.5, "y": 0.76, "from": 76, "to": 114, "format": "{v}s Elapsed", "size": 72, "count": [77.8, 113.5], "color": "@acc", "motion": [{ "m": "pop", "at": 77.8 }] }
+      ]
+    },
+    {
+      "id": "m_s4",
+      "t": [114.0, 152.0],
+      "layers": [
+        { "id": "m4_h", "type": "text", "t": [114.2, 152.0], "x": 0.5, "y": 0.22, "w": 1300, "text": "Part 4: Built-In Components", "size": 78, "weight": 800, "color": "@ink", "enter": "charIn" },
+        { "id": "m4_m", "type": "use", "def": "meter", "t": [114.8, 152.0], "args": { "x": 0.5, "y": 0.54, "w": 960, "from": 0.2, "to": 0.95, "dur": 2.5, "tone": "acc", "percent": true, "label": "Component Reuse", "at": 114.8 } },
+        { "id": "m4_cnt", "type": "chart", "kind": "counter", "t": [115.2, 152.0], "x": 0.5, "y": 0.78, "from": 114, "to": 152, "format": "{v}s Elapsed", "size": 72, "count": [115.2, 151.5], "color": "@ink", "motion": [{ "m": "pop", "at": 115.2 }] }
+      ]
+    },
+    {
+      "id": "m_s5",
+      "t": [152.0, 190.0],
+      "layers": [
+        { "id": "m5_h", "type": "text", "t": [152.2, 190.0], "x": 0.5, "y": 0.22, "w": 1300, "text": "Part 5: Pure Canvas Engine", "size": 78, "weight": 800, "color": "@ink", "enter": "charIn" },
+        { "id": "m5_ch", "type": "chart", "kind": "donut", "t": [152.8, 190.0], "x": 0.5, "y": 0.56, "w": 420, "h": 420, "data": [45, 30, 25], "labels": ["Shapes", "Text", "FX"], "colors": ["@acc", "@second", "@ink"], "motion": [{ "m": "pop", "at": 152.8 }] },
+        { "id": "m5_cnt", "type": "chart", "kind": "counter", "t": [153.2, 190.0], "x": 0.5, "y": 0.84, "from": 152, "to": 190, "format": "{v}s Elapsed", "size": 64, "count": [153.2, 189.5], "color": "@acc", "motion": [{ "m": "pop", "at": 153.2 }] }
+      ]
+    },
+    {
+      "id": "m_s6",
+      "t": [190.0, 228.0],
+      "layers": [
+        { "id": "m6_h", "type": "text", "t": [190.2, 228.0], "x": 0.5, "y": 0.22, "w": 1300, "text": "Part 6: Safe Area & Validation", "size": 78, "weight": 800, "color": "@ink", "enter": "charIn" },
+        { "id": "m6_d1", "type": "use", "def": "disc", "t": [190.8, 228.0], "args": { "x": 0.35, "y": 0.54, "icon": "shield", "size": 170, "hero": true, "label": "SAFE AREA", "at": 190.8 } },
+        { "id": "m6_d2", "type": "use", "def": "disc", "t": [191.4, 228.0], "args": { "x": 0.65, "y": 0.54, "icon": "check", "size": 170, "hero": false, "label": "VALIDATED", "at": 191.4 } },
+        { "id": "m6_cnt", "type": "chart", "kind": "counter", "t": [191.8, 228.0], "x": 0.5, "y": 0.82, "from": 190, "to": 228, "format": "{v}s Elapsed", "size": 68, "count": [191.8, 227.5], "color": "@ink", "motion": [{ "m": "pop", "at": 191.8 }] }
+      ]
+    },
+    {
+      "id": "m_s7",
+      "t": [228.0, 266.0],
+      "layers": [
+        { "id": "m7_h", "type": "text", "t": [228.2, 266.0], "x": 0.5, "y": 0.22, "w": 1300, "text": "Part 7: Streaming Muxer", "size": 78, "weight": 800, "color": "@ink", "enter": "charIn" },
+        { "id": "m7_br", "type": "use", "def": "browser", "t": [228.8, 266.0], "args": { "x": 0.5, "y": 0.56, "w": 1100, "url": "https://app.recipestudio.video/export", "at": 228.8 } },
+        { "id": "m7_cnt", "type": "chart", "kind": "counter", "t": [229.2, 266.0], "x": 0.5, "y": 0.84, "from": 228, "to": 266, "format": "{v}s Elapsed", "size": 64, "count": [229.2, 265.5], "color": "@acc", "motion": [{ "m": "pop", "at": 229.2 }] }
+      ]
+    },
+    {
+      "id": "m_s8",
+      "t": [266.0, 300.0],
+      "layers": [
+        { "id": "m8_h", "type": "text", "t": [266.2, 300.0], "x": 0.5, "y": 0.24, "w": 1300, "text": "Thanks for Watching!", "size": 92, "weight": 800, "color": "@ink", "enter": "charIn", "exit": "none" },
+        { "id": "m8_sub", "type": "use", "def": "badge", "t": [266.8, 300.0], "exit": "none", "args": { "x": 0.5, "y": 0.52, "text": "SUBSCRIBE", "tone": "warn", "pulse": 1.6, "at": 266.8 } },
+        { "id": "m8_cnt", "type": "chart", "kind": "counter", "t": [267.2, 300.0], "x": 0.5, "y": 0.76, "from": 266, "to": 300, "format": "{v}.0s Complete", "size": 84, "count": [267.2, 299.8], "color": "@acc", "exit": "none", "motion": [{ "m": "pop", "at": 267.2 }] }
+      ]
+    }
+  ]
+}

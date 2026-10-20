@@ -1,0 +1,182 @@
+{
+  "recipe": "v3.1",
+  "meta": {
+    "w": 1080,
+    "h": 1920,
+    "fps": 30,
+    "duration": 12.0,
+    "lang": "en",
+    "part": { "n": 1, "of": 1, "from": 0, "to": 12.0 }
+  },
+  "theme": { "palette": 2 },
+  "global": { "vignette": 0.55 },
+  "camera": [
+    { "t": 0, "x": 0.5, "y": 0.5, "zoom": 1.04 },
+    { "t": 0.35, "x": 0.5, "y": 0.5, "zoom": 1.0, "e": "outCubic" },
+    { "t": 4.2, "x": 0.5, "y": 0.51, "zoom": 1.02, "e": "inOutSine" },
+    { "t": 8.0, "x": 0.5, "y": 0.49, "zoom": 1.02, "e": "inOutSine" },
+    { "t": 12.0, "x": 0.5, "y": 0.5, "zoom": 1.0, "e": "inOutSine" }
+  ],
+  "scenes": [
+    {
+      "id": "v_s1",
+      "t": [0, 4.2],
+      "transition": { "type": "cut" },
+      "layers": [
+        {
+          "id": "v_badge",
+          "type": "use",
+          "def": "badge",
+          "t": [0.1, 12.0],
+          "exit": "none",
+          "args": { "x": 0.5, "y": 0.12, "text": "STEP 1", "tone": "acc", "at": 0.1 }
+        },
+        {
+          "id": "v_head",
+          "type": "text",
+          "t": [0.25, 4.2],
+          "x": 0.5,
+          "y": 0.18,
+          "w": 920,
+          "text": "Ship 3x Faster",
+          "size": 76,
+          "weight": 800,
+          "color": "@ink",
+          "enter": "charIn",
+          "exit": { "type": "fadeOut", "dur": 0.25 }
+        },
+        {
+          "id": "v_fig",
+          "type": "figure",
+          "t": [0.6, 4.2],
+          "x": 0.32,
+          "y": 0.46,
+          "w": 240,
+          "h": 380,
+          "style": "stick",
+          "color": "@acc",
+          "thickness": 8,
+          "poseKeys": [
+            { "t": 0, "pose": "idle", "e": "outBack" },
+            { "t": 0.8, "pose": "point", "e": "outBack" },
+            { "t": 2.0, "pose": "celebrate", "e": "outBack" }
+          ],
+          "motion": [{ "m": "pop", "at": 0.6, "dur": 0.35 }]
+        },
+        {
+          "id": "v_kpi",
+          "type": "use",
+          "def": "kpi",
+          "t": [1.1, 4.2],
+          "args": { "x": 0.68, "y": 0.46, "value": "300%", "label": "OUTPUT SPEED", "count": [100, 300], "at": 1.1 }
+        },
+        {
+          "id": "v_meter",
+          "type": "use",
+          "def": "meter",
+          "t": [2.0, 4.2],
+          "args": { "x": 0.5, "y": 0.72, "w": 820, "from": 0.15, "to": 0.92, "dur": 0.9, "tone": "acc", "percent": true, "label": "Frame Determinism", "at": 2.0 }
+        }
+      ]
+    },
+    {
+      "id": "v_s2",
+      "t": [4.2, 8.2],
+      "transition": { "type": "slideU", "dur": 0.3 },
+      "layers": [
+        {
+          "id": "v_h2",
+          "type": "text",
+          "t": [4.3, 8.2],
+          "x": 0.5,
+          "y": 0.18,
+          "w": 920,
+          "text": "Instant Validation",
+          "size": 72,
+          "weight": 800,
+          "color": "@ink",
+          "enter": "wordIn"
+        },
+        {
+          "id": "v_chat",
+          "type": "use",
+          "def": "chat",
+          "t": [4.6, 8.2],
+          "args": {
+            "x": 0.5,
+            "y": 0.5,
+            "w": 840,
+            "h": 680,
+            "title": "Recipe Workflow",
+            "at": 4.6,
+            "messages": [
+              { "from": "you", "text": "Paste voiceover transcript", "at": 4.8 },
+              { "from": "ai", "text": "Generated RECIPE v3.1 JSON", "at": 5.5 },
+              { "from": "you", "text": "Validated & ready to export!", "at": 6.3 }
+            ]
+          }
+        },
+        {
+          "id": "v_stamp",
+          "type": "use",
+          "def": "stamp",
+          "t": [7.0, 8.2],
+          "args": { "x": 0.5, "y": 0.76, "text": "VERIFIED", "tone": "acc", "rot": -5, "at": 7.0 }
+        }
+      ]
+    },
+    {
+      "id": "v_s3",
+      "t": [8.2, 12.0],
+      "transition": { "type": "fade", "dur": 0.25 },
+      "layers": [
+        {
+          "id": "v_h3",
+          "type": "text",
+          "t": [8.3, 12.0],
+          "x": 0.5,
+          "y": 0.18,
+          "w": 920,
+          "text": "Export Offline MP4",
+          "size": 74,
+          "weight": 800,
+          "color": "@ink",
+          "enter": "charIn",
+          "exit": "none"
+        },
+        {
+          "id": "v_chart",
+          "type": "chart",
+          "kind": "bar",
+          "t": [8.7, 12.0],
+          "x": 0.5,
+          "y": 0.48,
+          "w": 820,
+          "h": 480,
+          "data": [35, 62, 88, 100],
+          "labels": ["Part 1", "Part 2", "Part 3", "Merged"],
+          "colors": ["@second", "@second", "@second", "@acc"],
+          "animate": { "stagger": 0.12, "ease": "outBack", "dur": 0.55 },
+          "exit": "none",
+          "motion": [{ "m": "pop", "at": 8.7, "dur": 0.35 }]
+        },
+        {
+          "id": "v_btn",
+          "type": "use",
+          "def": "button",
+          "t": [9.8, 12.0],
+          "exit": "none",
+          "args": { "x": 0.5, "y": 0.75, "w": 520, "label": "RENDER 1080P MP4", "at": 9.8, "pressAt": 10.6 }
+        },
+        {
+          "id": "v_cur",
+          "type": "use",
+          "def": "cursor",
+          "t": [10.0, 12.0],
+          "exit": "none",
+          "args": { "from": { "x": 0.78, "y": 0.84 }, "to": { "x": 0.54, "y": 0.76 }, "at": 10.0, "dur": 0.55, "click": true }
+        }
+      ]
+    }
+  ]
+}

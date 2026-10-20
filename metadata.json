@@ -1,0 +1,6 @@
+{
+  "name": "Recipe Studio",
+  "description": "Deterministic offline RECIPE v3.1 motion-graphics engine, prompt pack builder, validator, and WebCodecs MP4 video exporter.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,67 @@
+{
+  "recipe": "v3.1",
+  "meta": { "w": 1920, "h": 1080, "fps": 60, "duration": 11.76, "lang": "en", "part": { "n": 1, "of": 1, "from": 0, "to": 11.76 } },
+  "theme": { "palette": 1 },
+  "global": { "vignette": 0.6 },
+  "camera": [
+    { "t": 0, "x": 0.5, "y": 0.5, "zoom": 1.06 },
+    { "t": 1.9, "x": 0.5, "y": 0.52, "zoom": 1, "e": "inOutSine" },
+    { "t": 2.9, "x": 0.5, "y": 0.53, "zoom": 1.03, "e": "inOutSine" },
+    { "t": 6.1, "x": 0.5, "y": 0.53, "zoom": 1.03 },
+    { "t": 6.45, "x": 0.5, "y": 0.53, "zoom": 1.08, "e": "outCubic" },
+    { "t": 7.1, "x": 0.5, "y": 0.53, "zoom": 1.08 },
+    { "t": 7.6, "x": 0.5, "y": 0.5, "zoom": 1, "e": "inOutSine" },
+    { "t": 9.1, "x": 0.53, "y": 0.5, "zoom": 1.04, "e": "inOutSine" }
+  ],
+  "scenes": [
+    {
+      "id": "s1", "t": [0, 2.6],
+      "layers": [
+        { "id": "h1", "type": "text", "t": [0.08, 7.3], "x": 0.5, "y": 0.44, "w": 1300, "text": "The App Sequence", "size": 120, "weight": 800, "color": "@ink", "enter": "charIn", "exit": { "type": "fadeOut", "dur": 0.25 },
+          "motion": [{ "m": "to", "at": 1.9, "dur": 0.4, "y": 0.1, "scale": 0.5 }] },
+        { "id": "ul", "type": "highlight", "t": [0.35, 1.9], "target": "h1", "word": "Sequence", "kind": "underline", "at": 0.35, "dur": 0.35, "color": "@acc", "parent": "h1", "exit": { "type": "blurOut", "dur": 0.35 } },
+        { "id": "sub", "type": "text", "t": [0.5, 1.95], "x": 0.5, "y": 0.58, "w": 700, "text": "how every app gets made", "size": 36, "font": "sans", "weight": 700, "color": "@muted", "enter": "wordIn" }
+      ]
+    },
+    {
+      "id": "s2", "t": [2.6, 7.1],
+      "layers": [
+        { "id": "loopG", "type": "group", "t": [2.6, 11.76], "x": 0.5, "y": 0.556, "w": 520, "h": 520, "exit": "none",
+          "motion": [{ "m": "to", "at": 7.1, "dur": 0.45, "x": 0.25, "scale": 0.55 }],
+          "children": [
+            { "id": "ring", "type": "shape", "kind": "ellipse", "x": 0.5, "y": 0.5, "w": 460, "fill": "none", "stroke": "@second", "strokeWidth": 6, "opacity": 0.9, "motion": [{ "m": "pop", "at": 2.6, "from": 0.3, "over": 1.06, "dur": 0.45 }] },
+            { "id": "n1", "type": "use", "def": "disc", "t": [3, 11.76], "args": { "x": 0.5, "y": 0.058, "emoji": "🔨", "label": "BUILD", "labelSide": "top", "at": 3 } },
+            { "id": "c1", "type": "shape", "kind": "chevron", "t": [3.3, 11.76], "x": 0.692, "y": 0.389, "w": 40, "rot": 60, "fill": "@acc", "glow": 0.8, "motion": [{ "m": "pop", "at": 3.3, "over": 1.3 }] },
+            { "id": "n2", "type": "use", "def": "disc", "t": [3.38, 11.76], "args": { "x": 0.883, "y": 0.721, "emoji": "🧪", "label": "TEST", "at": 3.38 } },
+            { "id": "c2", "type": "shape", "kind": "chevron", "t": [3.9, 11.76], "x": 0.5, "y": 0.721, "w": 40, "rot": 180, "fill": "@acc", "glow": 0.8, "motion": [{ "m": "pop", "at": 3.9, "over": 1.3 }] },
+            { "id": "n3", "type": "use", "def": "disc", "t": [4.25, 11.76], "args": { "x": 0.117, "y": 0.721, "emoji": "✨", "label": "IMPROVE", "at": 4.25 } },
+            { "id": "c3", "type": "shape", "kind": "chevron", "t": [4.45, 11.76], "x": 0.308, "y": 0.389, "w": 40, "rot": 300, "fill": "@acc", "glow": 0.8, "motion": [{ "m": "pop", "at": 4.45, "over": 1.3 }] },
+            { "id": "spark", "type": "shape", "kind": "ellipse", "t": [4.5, 6.25], "w": 26, "fill": "@acc", "glow": 1.2, "enter": "scaleIn", "exit": { "type": "fadeOut", "dur": 0.1 },
+              "motion": [{ "m": "orbit", "at": 4.5, "dur": 1.6, "cx": 0.5, "cy": 0.5, "r": 230, "period": 0.8, "phase": -90 }] },
+            { "id": "ver", "type": "chart", "kind": "counter", "t": [4.4, 6.25], "x": 0.5, "y": 0.5, "from": 1, "to": 3, "format": "v{v}", "size": 110, "count": [4.6, 5.9], "color": "@ink", "exit": { "type": "fadeOut", "dur": 0.12 }, "motion": [{ "m": "pop", "at": 4.4 }] },
+            { "id": "hub", "type": "shape", "kind": "ellipse", "t": [6.16, 11.76], "x": 0.5, "y": 0.46, "w": 150, "fill": "@acc", "glow": 1.2, "motion": [{ "m": "pop", "at": 6.16, "over": 1.25 }, { "m": "burst", "at": 6.2, "r": 460, "to": 1.57, "dur": 0.75, "color": "@acc" }] },
+            { "id": "chk", "type": "icon", "name": "check", "t": [6.2, 11.76], "x": 0.5, "y": 0.46, "w": 70, "color": "@dark", "motion": [{ "m": "pop", "at": 6.2, "over": 1.3 }] },
+            { "id": "fin", "type": "text", "t": [6.24, 11.76], "x": 0.5, "y": 0.66, "w": 300, "text": "FINAL", "size": 44, "weight": 800, "color": "@acc", "motion": [{ "m": "slam", "at": 6.24, "from": 1.5, "burst": false }] }
+          ]
+        },
+        { "id": "tag", "type": "text", "t": [5.1, 7.3], "x": 0.5, "y": 0.903, "w": 560, "text": "repeat until it feels final", "size": 30, "font": "sans", "weight": 800, "color": "@ink",
+          "plate": { "fill": "@surf", "stroke": "@acc", "strokeWidth": 2, "radius": 33, "pad": [30, 16] }, "enter": "wordIn", "exit": { "type": "fadeOut", "dur": 0.2 } }
+      ]
+    },
+    {
+      "id": "s3", "t": [7.1, 11.76],
+      "layers": [
+        { "id": "head", "type": "text", "t": [7.3, 11.76], "x": 0.5, "y": 0.15, "w": 1100, "text": "See it on a real app", "size": 84, "weight": 800, "color": "@ink", "enter": "charIn", "exit": "none" },
+        { "id": "lbl", "type": "text", "t": [7.6, 11.76], "x": 0.25, "y": 0.745, "w": 300, "text": "THE METHOD", "size": 26, "font": "sans", "weight": 800, "color": "@muted", "enter": "charFade", "exit": "none" },
+        { "id": "ln", "type": "shape", "kind": "rect", "t": [9.15, 11.76], "x": 0.343, "y": 0.556, "w": 380, "h": 6, "anchor": "left", "fill": "@acc", "glow": 0.8, "exit": "none", "motion": [{ "m": "grow", "at": 9.15, "axis": "w", "dur": 0.35 }] },
+        { "id": "chev", "type": "shape", "kind": "chevron", "t": [9.45, 11.76], "x": 0.542, "y": 0.556, "w": 36, "fill": "@acc", "glow": 0.8, "exit": "none", "motion": [{ "m": "pop", "at": 9.45, "over": 1.3 }] },
+        { "id": "card", "type": "shape", "kind": "card", "style": "hero", "t": [9.5, 11.76], "x": 0.703, "y": 0.556, "w": 600, "h": 430, "radius": 40, "exit": "none", "motion": [{ "m": "slide", "at": 9.5, "from": "R", "dist": 90, "dur": 0.35 }] },
+        { "id": "ico", "type": "use", "def": "disc", "t": [9.83, 11.76], "args": { "x": 0.589, "y": 0.435, "emoji": "📱", "size": 96, "hero": true, "at": 9.83 } },
+        { "id": "t1", "type": "text", "t": [9.9, 11.76], "x": 0.714, "y": 0.418, "w": 340, "text": "My app", "size": 48, "weight": 800, "color": "@ink", "align": "left", "enter": "charIn", "exit": "none" },
+        { "id": "t2", "type": "text", "t": [10, 11.76], "x": 0.714, "y": 0.463, "w": 340, "text": "built step by step", "size": 26, "font": "sans", "weight": 700, "color": "@muted", "align": "left", "enter": "fadeUp", "exit": "none" },
+        { "id": "tl", "type": "use", "def": "timeline", "t": [10.3, 11.76], "args": { "x": 0.703, "y": 0.611, "w": 460, "nodes": ["v1", "v2", "v3", "Final"], "at": 10.3, "dur": 0.74, "finalTone": "acc" } },
+        { "id": "up", "type": "use", "def": "badge", "t": [11.12, 11.76], "args": { "x": 0.792, "y": 0.366, "text": "UP NEXT ▶", "tone": "warn", "at": 11.12 } }
+      ]
+    }
+  ]
+}
