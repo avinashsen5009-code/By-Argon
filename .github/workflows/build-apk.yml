@@ -134,9 +134,20 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug --stacktrace
 
+      - name: Locate APK
+        run: |
+          echo "APK files found:"
+          find android -name "*.apk" -type f -print
+          echo "Build outputs tree:"
+          find android -path "*build/outputs*" -maxdepth 8 -print | head -50
+          if [ -z "$(find android -name '*.apk' -type f)" ]; then
+            echo "::error::Gradle finished but produced no .apk file"
+            exit 1
+          fi
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: android/**/outputs/apk/**/*.apk
           if-no-files-found: error
