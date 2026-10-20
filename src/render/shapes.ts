@@ -13,7 +13,13 @@ export function createCanvasFillStyle(
   if (resolved.kind === 'none') return 'transparent';
   if (resolved.kind === 'solid') return resolved.color || '#FFFFFF';
 
-  const stops = resolved.stops && resolved.stops.length > 0 ? resolved.stops : [[0, '#FFFFFF'], [1, '#000000']];
+  const stops: [number, string][] =
+    resolved.stops && resolved.stops.length > 0
+      ? resolved.stops
+      : [
+          [0, '#FFFFFF'],
+          [1, '#000000'],
+        ];
   if (resolved.kind === 'radial') {
     const r = Math.max(w, h) * 0.55;
     const grad = ctx.createRadialGradient(-w * 0.08, -h * 0.12, r * 0.05, 0, 0, r);

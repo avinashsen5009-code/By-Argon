@@ -7,17 +7,22 @@ import type { RecipeDocument } from '../core/types.ts';
 import { validateRecipe } from '../core/validate.ts';
 import { loadAllProjectsFromDb, saveProjectToDb, type StoredProject } from './db.ts';
 
+let cachedSamples: StoredProject[] | null = null;
+let cachedDefaultSample: StoredProject | null = null;
+
 export function buildProjectFromSample(
   id: string,
   title: string,
   rawJson: string,
-  rawTranscript: string
+  rawTranscript: string,
+  skipInitialValidation = false
 ): StoredProject {
   const doc = JSON.parse(rawJson) as RecipeDocument;
   const duration = doc.meta?.duration ?? 12;
   const transcript = parseTranscript(rawTranscript, duration);
-  const val = validateRecipe(doc, transcript);
+  const val = skipInitialValidation ? { valid: true, issues: [] } : validateRecipe(doc, transcript);
   const partMetaList = splitTranscriptIntoParts(transcript);
+  const formattedJson = rawJson.trim();
 
   return {
     id,
@@ -30,10 +35,10 @@ export function buildProjectFromSample(
     screenText: doc.meta?.lang ?? 'en',
     transcriptRaw: rawTranscript,
     transcript,
-    recipeJson: JSON.stringify(doc, null, 2),
+    recipeJson: formattedJson,
     parts: partMetaList.map((pm, idx) => ({
       part: pm,
-      rawJson: idx === 0 ? JSON.stringify(doc, null, 2) : '',
+      rawJson: idx === 0 ? formattedJson : '',
       doc: idx === 0 ? doc : undefined,
       issues: idx === 0 ? val.issues : [],
       status: idx === 0 ? (val.valid ? 'valid' : 'errors') : 'empty',
@@ -42,13 +47,24 @@ export function buildProjectFromSample(
   };
 }
 
+export function getDefaultSampleProject(): StoredProject {
+  if (!cachedDefaultSample) {
+    cachedDefaultSample = buildProjectFromSample(
+      'sample-part-c',
+      'Part C Worked Example (16:9 Hinglish)',
+      partCDemoJson,
+      DEMO_HINGLISH_TRANSCRIPT
+    );
+  }
+  return cachedDefaultSample;
+}
+
 export function getBuiltInSampleProjects(): StoredProject[] {
-  const p1 = buildProjectFromSample(
-    'sample-part-c',
-    'Part C Worked Example (16:9 Hinglish)',
-    partCDemoJson,
-    DEMO_HINGLISH_TRANSCRIPT
-  );
+  if (cachedSamples) {
+    return cachedSamples;
+  }
+
+  const p1 = getDefaultSampleProject();
 
   const verticalTranscript = `[0.00 - 4.20] Ship motion graphics 3 times faster with deterministic frame rendering.
 [4.20 - 8.20] Paste your voiceover transcript and validate every RECIPE v3.1 JSON layer instantly.
@@ -74,10 +90,12 @@ export function getBuiltInSampleProjects(): StoredProject[] {
     'sample-5min-stress',
     '5-Minute Multi-Part Master (300s)',
     stress5MinJson,
-    stressTranscript
+    stressTranscript,
+    true
   );
 
-  return [p1, p2, p3];
+  cachedSamples = [p1, p2, p3];
+  return cachedSamples;
 }
 
 export async function initializeProjectsStore(): Promise<{

@@ -8,16 +8,24 @@ export interface UnifiedMuxer {
   addVideoChunk(chunk: EncodedVideoChunk, meta?: EncodedVideoChunkMetadata): void;
   addAudioChunk(chunk: EncodedAudioChunk, meta?: EncodedAudioChunkMetadata): void;
   finalize(): Promise<{ blob: Blob; nativeUri?: string; byteLength: number }>;
+  cancel(): Promise<void>;
 }
 
+/**
+ * Creates a unified MP4 or WebM muxer backed by `StreamTarget` with 2 MB chunks (`chunkSize: 2 * 1024 * 1024`).
+ * Uses `fastStart: false` with random-access header patching at the end (`RandomAccessFile` on Android
+ * and random-access buffer in Web) for universal MP4 player compatibility (M14).
+ */
 export async function createUnifiedMuxer(options: {
   container: 'mp4' | 'webm';
   width: number;
   height: number;
   fps: number;
   hasAudio: boolean;
+  audioCodec?: 'aac' | 'opus';
   audioSampleRate?: number;
   audioChannels?: number;
+  alpha?: boolean;
   fileName: string;
 }): Promise<UnifiedMuxer> {
   const mimeType = options.container === 'mp4' ? 'video/mp4' : 'video/webm';
@@ -29,7 +37,7 @@ export async function createUnifiedMuxer(options: {
         sink.write(data, position);
       },
       chunked: true,
-      chunkSize: 1024 * 1024,
+      chunkSize: 2 * 1024 * 1024, // 2 MB chunk batching per M15
     });
 
     const muxer = new Mp4Muxer({
@@ -42,12 +50,12 @@ export async function createUnifiedMuxer(options: {
       },
       audio: options.hasAudio
         ? {
-            codec: 'aac',
+            codec: options.audioCodec === 'opus' ? 'opus' : 'aac',
             sampleRate: options.audioSampleRate ?? 48000,
             numberOfChannels: options.audioChannels ?? 2,
           }
         : undefined,
-      fastStart: 'in-memory',
+      fastStart: false,
     });
 
     return {
@@ -59,6 +67,7 @@ export async function createUnifiedMuxer(options: {
         muxer.finalize();
         return sink.finalize();
       },
+      cancel: () => sink.cancel(),
     };
   } else {
     const target = new WebmStreamTarget({
@@ -66,7 +75,7 @@ export async function createUnifiedMuxer(options: {
         sink.write(data, position);
       },
       chunked: true,
-      chunkSize: 1024 * 1024,
+      chunkSize: 2 * 1024 * 1024,
     });
 
     const muxer = new WebmMuxer({
@@ -76,6 +85,7 @@ export async function createUnifiedMuxer(options: {
         width: options.width,
         height: options.height,
         frameRate: options.fps,
+        alpha: Boolean(options.alpha),
       },
       audio: options.hasAudio
         ? {
@@ -95,6 +105,7 @@ export async function createUnifiedMuxer(options: {
         muxer.finalize();
         return sink.finalize();
       },
+      cancel: () => sink.cancel(),
     };
   }
 }

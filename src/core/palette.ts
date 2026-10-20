@@ -204,9 +204,17 @@ export function hslToHex(h: number, s: number, l: number): string {
 }
 
 export function interpolateHexColor(hexA: string, hexB: string, t: number): string {
+  const u = clamp(t, 0, 1);
   const [r1, g1, b1] = hexToRgb(hexA);
   const [r2, g2, b2] = hexToRgb(hexB);
-  return rgbToHex(lerp(r1, r2, t), lerp(g1, g2, t), lerp(b1, b2, t));
+  // Interpolate in linear RGB space (gamma 2.2) per M3 specification
+  const toLinear = (c: number) => Math.pow(clamp(c / 255, 0, 1), 2.2);
+  const toSrgb = (l: number) => Math.pow(clamp(l, 0, 1), 1 / 2.2) * 255;
+
+  const rl = lerp(toLinear(r1), toLinear(r2), u);
+  const gl = lerp(toLinear(g1), toLinear(g2), u);
+  const bl = lerp(toLinear(b1), toLinear(b2), u);
+  return rgbToHex(toSrgb(rl), toSrgb(gl), toSrgb(bl));
 }
 
 /**

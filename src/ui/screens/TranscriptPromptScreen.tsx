@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { PALETTE_NAMES, PALETTE_TABLE } from '../../core/palette.ts';
+import { expandThemeTokens, PALETTE_NAMES, PALETTE_TABLE } from '../../core/palette.ts';
 import { extractCarryFromPart, splitTranscriptIntoParts } from '../../core/parts.ts';
 import { buildPromptForPart } from '../../core/promptbuilder.ts';
 import { parseTranscript } from '../../core/transcript.ts';
 import type { ScreenLang, ThemeSpec } from '../../core/types.ts';
-import type { StoredProject } from '../../store/db.ts';
+import { triggerHaptic, type StoredProject } from '../../store/db.ts';
 
 interface TranscriptPromptScreenProps {
   project: StoredProject;
@@ -21,6 +21,8 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
 }) => {
   const [copiedPart, setCopiedPart] = useState<number | null>(null);
   const [showPromptPreview, setShowPromptPreview] = useState(false);
+  const [showWordTable, setShowWordTable] = useState(false);
+  const [customHexInput, setCustomHexInput] = useState(project.theme.hex ?? '#FF7A00');
 
   const activePartSlot = project.parts[project.activePartIndex] ?? project.parts[0];
   const partNumber = activePartSlot?.part.n ?? 1;
@@ -66,6 +68,8 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
     previousCarry,
   ]);
 
+  const activeTokens = useMemo(() => expandThemeTokens(project.theme), [project.theme]);
+
   const handleTranscriptChange = (rawText: string, explicitDuration?: number) => {
     onUpdateProject((prev) => {
       const parsed = parseTranscript(rawText, explicitDuration ?? prev.transcript.duration);
@@ -95,6 +99,32 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
     handleTranscriptChange(project.transcriptRaw, nextDur);
   };
 
+  const adjustAudioOffset = (deltaSec: number) => {
+    onUpdateProject((prev) => ({
+      ...prev,
+      audioOffsetSec: Math.round(((prev.audioOffsetSec ?? 0) + deltaSec) * 100) / 100,
+    }));
+  };
+
+  const nudgeWordTimestamp = (wordIndex: number, field: 's' | 'e', deltaSec: number) => {
+    onUpdateProject((prev) => {
+      const words = prev.transcript.words.map((w) => {
+        if (w.i !== wordIndex) return w;
+        const nextVal = Math.max(0, Math.round((w[field] + deltaSec) * 100) / 100);
+        return field === 's'
+          ? { ...w, s: nextVal, e: Math.max(nextVal + 0.04, w.e), estimated: false }
+          : { ...w, e: Math.max(w.s + 0.04, nextVal), estimated: false };
+      });
+      return {
+        ...prev,
+        transcript: {
+          ...prev.transcript,
+          words,
+        },
+      };
+    });
+  };
+
   const handleAudioUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -103,9 +133,10 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
       const dataUrl = String(reader.result || '');
       const audioEl = new Audio(dataUrl);
       audioEl.onloadedmetadata = () => {
-        const audioDur = Number.isFinite(audioEl.duration) && audioEl.duration > 0
-          ? Math.round(audioEl.duration * 100) / 100
-          : project.transcript.duration;
+        const audioDur =
+          Number.isFinite(audioEl.duration) && audioEl.duration > 0
+            ? Math.round(audioEl.duration * 100) / 100
+            : project.transcript.duration;
         onUpdateProject((prev) => {
           const parsed = parseTranscript(prev.transcriptRaw, audioDur);
           const newPartMetas = splitTranscriptIntoParts(parsed);
@@ -148,11 +179,18 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
     onUpdateProject((prev) => ({ ...prev, theme }));
   };
 
+  const handleApplyCustomHex = (rawHex: string) => {
+    const clean = rawHex.startsWith('#') ? rawHex.toUpperCase() : `#${rawHex.toUpperCase()}`;
+    setCustomHexInput(clean);
+    if (/^#[0-9A-F]{6}$/.test(clean)) {
+      setTheme({ hex: clean });
+    }
+  };
+
   const handleCopyPrompt = async () => {
     try {
       await navigator.clipboard.writeText(builtPrompt);
     } catch {
-      // Fallback copy
       const ta = document.createElement('textarea');
       ta.value = builtPrompt;
       document.body.appendChild(ta);
@@ -160,6 +198,7 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
       document.execCommand('copy');
       document.body.removeChild(ta);
     }
+    triggerHaptic(15);
     setCopiedPart(partNumber);
     setTimeout(() => setCopiedPart(null), 2500);
   };
@@ -170,7 +209,9 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
       <div className="rounded-2xl border border-white/10 bg-[#131720] p-5">
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-white/10">
           <div>
-            <h2 className="font-display text-lg font-bold text-white">01. Voiceover Transcript & Prompt Pack</h2>
+            <h2 className="font-display text-lg font-bold text-white">
+              01. Voiceover Transcript & Prompt Pack
+            </h2>
             <p className="mt-0.5 text-xs text-slate-400">
               Paste your word-timestamped or sentence transcript, choose theme & canvas, then copy the complete RECIPE v3.1 prompt.
             </p>
@@ -265,7 +306,7 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
           </div>
         </div>
 
-        {/* Theme Palette Selector (Palettes 1-5 + Custom Hex Swatches) */}
+        {/* Theme Palette Selector (Palettes 1-5 + Custom Hex Input & 13-Token Preview) */}
         <div className="mt-4">
           <span className="text-xs font-semibold text-slate-300">Theme Palette (SPEC Section 7)</span>
           <div className="mt-2 flex flex-wrap gap-2">
@@ -295,7 +336,7 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
             })}
           </div>
 
-          {/* Custom Hex Row */}
+          {/* Custom Hex Row + 6-digit Hex Input */}
           <div className="mt-2.5 flex flex-wrap items-center gap-2">
             <span className="text-xs text-slate-400">Or Custom Hex:</span>
             {CUSTOM_HEX_PRESETS.map((hex) => {
@@ -304,32 +345,77 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
                 <button
                   key={hex}
                   type="button"
-                  onClick={() => setTheme({ hex })}
+                  onClick={() => {
+                    setCustomHexInput(hex);
+                    setTheme({ hex });
+                  }}
                   className={`min-h-[40px] flex items-center gap-1.5 rounded-xl px-3 text-xs font-semibold border transition-colors ${
                     isSelected
                       ? 'border-white bg-white/15 text-white'
                       : 'border-white/10 bg-[#0B0D12] text-slate-300 hover:border-white/25'
                   }`}
                 >
-                  <span
-                    style={{ backgroundColor: hex }}
-                    className="h-3.5 w-3.5 rounded-full"
-                  />
+                  <span style={{ backgroundColor: hex }} className="h-3.5 w-3.5 rounded-full" />
                   <span>{hex}</span>
                 </button>
               );
             })}
+
+            <label htmlFor="custom-hex-input" className="sr-only">
+              Custom Hex Code
+            </label>
+            <input
+              id="custom-hex-input"
+              type="text"
+              maxLength={7}
+              value={customHexInput}
+              onChange={(e) => handleApplyCustomHex(e.target.value)}
+              placeholder="#FF7A00"
+              className="min-h-[40px] w-28 rounded-xl border border-white/15 bg-[#0B0D12] px-3 font-mono text-xs text-white focus:border-sky-400 focus:outline-none"
+            />
+          </div>
+
+          {/* Live 13-Token Swatch Preview Bar */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-[#0B0D12] px-3 py-2">
+            {(
+              [
+                ['@bg', activeTokens.bg],
+                ['@scn', activeTokens.scn],
+                ['@card', activeTokens.card],
+                ['@hero', activeTokens.hero],
+                ['@acc', activeTokens.acc],
+                ['@accSoft', activeTokens.accSoft],
+                ['@second', activeTokens.second],
+                ['@warn', activeTokens.warn],
+                ['@warnBg', activeTokens.warnBg],
+                ['@ink', activeTokens.ink],
+                ['@sub', activeTokens.sub],
+              ] as const
+            ).map(([name, val]) => (
+              <div
+                key={name}
+                className="flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.03] px-2 py-0.5 font-mono text-[10px] text-slate-300"
+              >
+                <span
+                  style={{ backgroundColor: val }}
+                  className="h-2.5 w-2.5 rounded-full border border-white/25"
+                />
+                <span>{name}</span>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* Voiceover Audio File & Duration Stepper */}
+        {/* Voiceover Audio File, Audio Offset Stepper & Duration Stepper */}
         <div className="mt-4 pt-4 border-t border-white/10 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <label
               htmlFor="voiceover-audio-upload"
               className="min-h-[48px] inline-flex items-center px-4 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-semibold text-white cursor-pointer transition-colors"
             >
-              {project.audioFileName ? `Audio: ${project.audioFileName}` : 'Attach Voiceover Audio (MP3/WAV)'}
+              {project.audioFileName
+                ? `Audio: ${project.audioFileName}`
+                : 'Attach Voiceover Audio (MP3/WAV/M4A/OGG)'}
             </label>
             <input
               id="voiceover-audio-upload"
@@ -338,6 +424,29 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
               onChange={handleAudioUpload}
               className="sr-only"
             />
+
+            {/* Audio Offset Stepper (-0.5s, -0.05s, +0.05s, +0.5s) */}
+            <div className="flex items-center gap-1 tabular-nums">
+              <span className="text-xs text-slate-400 mr-1">Offset:</span>
+              <button
+                type="button"
+                onClick={() => adjustAudioOffset(-0.05)}
+                className="min-h-[40px] px-2 rounded-lg bg-[#0B0D12] border border-white/10 hover:bg-white/10 text-[11px] font-bold text-slate-200"
+              >
+                -0.05s
+              </button>
+              <span className="min-w-[54px] text-center font-mono text-xs font-bold text-white">
+                {(project.audioOffsetSec ?? 0) >= 0 ? '+' : ''}
+                {(project.audioOffsetSec ?? 0).toFixed(2)}s
+              </span>
+              <button
+                type="button"
+                onClick={() => adjustAudioOffset(0.05)}
+                className="min-h-[40px] px-2 rounded-lg bg-[#0B0D12] border border-white/10 hover:bg-white/10 text-[11px] font-bold text-slate-200"
+              >
+                +0.05s
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-1.5 tabular-nums">
@@ -383,14 +492,36 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
 
       {/* Transcript Input Box */}
       <div className="rounded-2xl border border-white/10 bg-[#131720] p-5">
-        <div className="flex items-center justify-between gap-2 mb-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
           <label htmlFor="transcript-textarea" className="text-sm font-bold text-white">
             Timestamped Transcript (SRT, VTT, Whisper JSON, or `[start - end] text`)
           </label>
-          <span className="text-xs text-slate-400 tabular-nums">
-            Auto-splits into {project.parts.length} part(s) (30–40s each)
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400 tabular-nums">
+              Auto-splits into {project.parts.length} part(s) (30–40s each)
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowWordTable((v) => !v)}
+              className="min-h-[36px] px-3 rounded-lg bg-white/10 hover:bg-white/15 text-xs font-semibold text-white transition-colors"
+            >
+              {showWordTable ? 'Hide Word Table' : `Edit Word Timings (${project.transcript.words.length})`}
+            </button>
+          </div>
         </div>
+
+        {/* Non-monotonic timestamp warning banner (M10) */}
+        {project.transcript.warnings && project.transcript.warnings.length > 0 && (
+          <div className="mb-3 rounded-xl border border-amber-400/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+            <div className="font-bold">Transcript Timestamp Auto-Clamp Notice:</div>
+            <ul className="mt-1 list-disc pl-4 space-y-0.5">
+              {project.transcript.warnings.slice(0, 4).map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <textarea
           id="transcript-textarea"
           rows={5}
@@ -399,6 +530,52 @@ export const TranscriptPromptScreen: React.FC<TranscriptPromptScreenProps> = ({
           placeholder="Paste word-timestamped JSON, SRT subtitles, or timestamped lines..."
           className="w-full rounded-xl border border-white/15 bg-[#0B0D12] p-3.5 font-mono text-xs leading-relaxed text-slate-100 placeholder-slate-500 focus:border-sky-400 focus:outline-none"
         />
+
+        {/* Collapsible Word Timestamp Table with -0.05s / +0.05s Steppers & Est. Badges (M10) */}
+        {showWordTable && (
+          <div className="mt-3 max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-[#0B0D12] p-3">
+            <div className="mb-2 text-xs font-semibold text-slate-300">
+              Word Anchors (`@w0`..`@w{Math.max(0, project.transcript.words.length - 1)}`) — Nudge ±0.05s
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+              {project.transcript.words.map((w) => (
+                <div
+                  key={w.i}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-[#131720] px-2.5 py-1.5 text-xs tabular-nums"
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="font-mono text-[11px] font-bold text-sky-400">@w{w.i}</span>
+                    <span className="truncate font-semibold text-white">{w.w}</span>
+                    {w.estimated && (
+                      <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+                        Est.
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0 font-mono text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => nudgeWordTimestamp(w.i, 's', -0.05)}
+                      className="rounded bg-white/10 px-1.5 py-0.5 hover:bg-white/20 text-slate-200"
+                    >
+                      -
+                    </button>
+                    <span className="text-slate-300">
+                      {w.s.toFixed(2)}–{w.e.toFixed(2)}s
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => nudgeWordTimestamp(w.i, 'e', 0.05)}
+                      className="rounded bg-white/10 px-1.5 py-0.5 hover:bg-white/20 text-slate-200"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Part Selector Bar (for multi-part videos) */}
         {project.parts.length > 1 && (

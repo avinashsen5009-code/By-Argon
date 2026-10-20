@@ -32,15 +32,45 @@ const ALLOWED_FUNCS = new Set([
   'ease',
 ]);
 
+const FORBIDDEN_IDENTIFIERS = new Set([
+  'constructor',
+  '__proto__',
+  'prototype',
+  'process',
+  'window',
+  'globalThis',
+  'self',
+  'document',
+  'Function',
+  'eval',
+  'setTimeout',
+  'setInterval',
+  'fetch',
+  'XMLHttpRequest',
+  'WebSocket',
+  'import',
+  'require',
+  'while',
+  'for',
+  'do',
+]);
+
 type Token =
   | { type: 'num'; val: number }
   | { type: 'str'; val: string }
   | { type: 'id'; val: string }
   | { type: 'op'; val: string }
   | { type: 'paren'; val: '(' | ')' }
-  | { type: 'comma' };
+  | { type: 'question' }
+  | { type: 'colon' }
+  | { type: 'comma' }
+  | { type: 'eof' };
 
-function tokenizeExpr(src: string): Token[] {
+export type CompiledExprFn = (ctx: ExprContext) => number;
+
+const compiledClosureCache = new Map<string, CompiledExprFn>();
+
+export function tokenizeExpr(src: string): Token[] {
   const tokens: Token[] = [];
   let idx = 0;
   while (idx < src.length) {
@@ -59,7 +89,24 @@ function tokenizeExpr(src: string): Token[] {
       idx++;
       continue;
     }
-    if ('+-*/%^'.includes(ch)) {
+    if (ch === '?') {
+      tokens.push({ type: 'question' });
+      idx++;
+      continue;
+    }
+    if (ch === ':') {
+      tokens.push({ type: 'colon' });
+      idx++;
+      continue;
+    }
+    // Two-character comparison operators
+    const twoChar = src.slice(idx, idx + 2);
+    if (twoChar === '<=' || twoChar === '>=' || twoChar === '==' || twoChar === '!=') {
+      tokens.push({ type: 'op', val: twoChar });
+      idx += 2;
+      continue;
+    }
+    if ('+-*/%^<>'.includes(ch)) {
       tokens.push({ type: 'op', val: ch });
       idx++;
       continue;
@@ -71,13 +118,21 @@ function tokenizeExpr(src: string): Token[] {
       while (idx < src.length && src[idx] !== quote) {
         str += src[idx++];
       }
+      if (idx >= src.length) {
+        throw new Error(`Unterminated string literal in expression "${src}"`);
+      }
       idx++; // skip closing quote
       tokens.push({ type: 'str', val: str });
       continue;
     }
     if (/\d/.test(ch) || (ch === '.' && /\d/.test(src[idx + 1] ?? ''))) {
       let numStr = '';
+      let dotCount = 0;
       while (idx < src.length && /[\d.]/.test(src[idx])) {
+        if (src[idx] === '.') dotCount++;
+        if (dotCount > 1) {
+          throw new Error(`Invalid number literal or member access in expression "${src}"`);
+        }
         numStr += src[idx++];
       }
       tokens.push({ type: 'num', val: parseFloat(numStr) });
@@ -88,32 +143,213 @@ function tokenizeExpr(src: string): Token[] {
       while (idx < src.length && /[a-zA-Z0-9_]/.test(src[idx])) {
         id += src[idx++];
       }
+      if (FORBIDDEN_IDENTIFIERS.has(id)) {
+        throw new Error(`Forbidden identifier "${id}" in expression`);
+      }
       tokens.push({ type: 'id', val: id });
       continue;
     }
     throw new Error(`Unexpected character "${ch}" in expression "${src}"`);
   }
+  tokens.push({ type: 'eof' });
   return tokens;
+}
+
+function leftBindingPower(tok: Token): number {
+  if (tok.type === 'question') return 10;
+  if (tok.type === 'op') {
+    switch (tok.val) {
+      case '==':
+      case '!=':
+        return 20;
+      case '<':
+      case '>':
+      case '<=':
+      case '>=':
+        return 30;
+      case '+':
+      case '-':
+        return 40;
+      case '*':
+      case '/':
+      case '%':
+        return 50;
+      case '^':
+        return 60;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Pratt parser that compiles a SPEC 8d expression into a pure closure `(ctx: ExprContext) => number`.
+ * Never uses `eval` or `new Function`.
+ */
+export function compileExpression(expr: string): CompiledExprFn {
+  const cached = compiledClosureCache.get(expr);
+  if (cached) return cached;
+
+  const tokens = tokenizeExpr(expr);
+  let pos = 0;
+
+  function peek(): Token {
+    return tokens[pos] ?? { type: 'eof' };
+  }
+
+  function consume(): Token {
+    return tokens[pos++] ?? { type: 'eof' };
+  }
+
+  function parseExpr(rbp = 0): CompiledExprFn {
+    const t = consume();
+    let left = nud(t);
+
+    while (rbp < leftBindingPower(peek())) {
+      const opTok = consume();
+      left = led(opTok, left);
+    }
+
+    return left;
+  }
+
+  function nud(tok: Token): CompiledExprFn {
+    if (tok.type === 'num') {
+      const v = tok.val;
+      return () => v;
+    }
+
+    if (tok.type === 'op' && (tok.val === '-' || tok.val === '+')) {
+      const operand = parseExpr(70);
+      return tok.val === '-' ? (ctx) => -operand(ctx) : operand;
+    }
+
+    if (tok.type === 'paren' && tok.val === '(') {
+      const inner = parseExpr(0);
+      const next = consume();
+      if (next.type !== 'paren' || next.val !== ')') {
+        throw new Error(`Expected closing ")" in expression "${expr}"`);
+      }
+      return inner;
+    }
+
+    if (tok.type === 'id') {
+      const name = tok.val;
+      const next = peek();
+      if (next.type === 'paren' && next.val === '(') {
+        if (!ALLOWED_FUNCS.has(name)) {
+          throw new Error(`Unknown function "${name}" in expression`);
+        }
+        consume(); // consume '('
+        const argClosures: ((ctx: ExprContext) => number | string)[] = [];
+        while (peek().type !== 'eof') {
+          const pk = peek();
+          if (pk.type === 'paren' && pk.val === ')') {
+            consume();
+            break;
+          }
+          if (pk.type === 'str') {
+            consume();
+            const s = pk.val;
+            argClosures.push(() => s);
+          } else if (pk.type === 'id' && name === 'ease' && argClosures.length === 0) {
+            consume();
+            const s = pk.val;
+            argClosures.push(() => s);
+          } else {
+            const sub = parseExpr(0);
+            argClosures.push(sub);
+          }
+          if (peek().type === 'comma') {
+            consume();
+          } else if (peek().type !== 'paren' || (peek() as any).val !== ')') {
+            throw new Error(`Expected "," or ")" in function "${name}" call`);
+          }
+        }
+        return (ctx) => {
+          const evaluatedArgs = argClosures.map((fn) => fn(ctx));
+          return callFunc(name, evaluatedArgs, ctx);
+        };
+      }
+
+      if (!ALLOWED_VARS.has(name)) {
+        throw new Error(`Unknown variable "${name}" in expression`);
+      }
+      return (ctx) => lookupVar(name, ctx);
+    }
+
+    throw new Error(`Unexpected token in expression "${expr}"`);
+  }
+
+  function led(tok: Token, left: CompiledExprFn): CompiledExprFn {
+    if (tok.type === 'question') {
+      const thenBranch = parseExpr(0);
+      const colonTok = consume();
+      if (colonTok.type !== 'colon') {
+        throw new Error(`Expected ":" in ternary expression "${expr}"`);
+      }
+      const elseBranch = parseExpr(9);
+      return (ctx) => (left(ctx) !== 0 ? thenBranch(ctx) : elseBranch(ctx));
+    }
+
+    if (tok.type === 'op') {
+      const op = tok.val;
+      const lbp = leftBindingPower(tok);
+      // Right-associative for exponentiation `^`
+      const right = parseExpr(op === '^' ? lbp - 1 : lbp);
+      switch (op) {
+        case '+':
+          return (ctx) => left(ctx) + right(ctx);
+        case '-':
+          return (ctx) => left(ctx) - right(ctx);
+        case '*':
+          return (ctx) => left(ctx) * right(ctx);
+        case '/':
+          return (ctx) => {
+            const r = right(ctx);
+            return Math.abs(r) < 1e-12 ? 0 : left(ctx) / r;
+          };
+        case '%':
+          return (ctx) => {
+            const r = right(ctx);
+            return Math.abs(r) < 1e-12 ? 0 : left(ctx) % r;
+          };
+        case '^':
+          return (ctx) => Math.pow(left(ctx), right(ctx));
+        case '<':
+          return (ctx) => (left(ctx) < right(ctx) ? 1 : 0);
+        case '>':
+          return (ctx) => (left(ctx) > right(ctx) ? 1 : 0);
+        case '<=':
+          return (ctx) => (left(ctx) <= right(ctx) ? 1 : 0);
+        case '>=':
+          return (ctx) => (left(ctx) >= right(ctx) ? 1 : 0);
+        case '==':
+          return (ctx) => (Math.abs(left(ctx) - right(ctx)) < 1e-9 ? 1 : 0);
+        case '!=':
+          return (ctx) => (Math.abs(left(ctx) - right(ctx)) >= 1e-9 ? 1 : 0);
+      }
+    }
+
+    throw new Error(`Unexpected infix token in expression "${expr}"`);
+  }
+
+  const rootFn = parseExpr(0);
+  if (peek().type !== 'eof') {
+    throw new Error(`Unexpected trailing tokens in expression "${expr}"`);
+  }
+
+  const safeClosure: CompiledExprFn = (ctx) => {
+    const val = rootFn(ctx);
+    return Number.isFinite(val) ? val : 0;
+  };
+
+  compiledClosureCache.set(expr, safeClosure);
+  return safeClosure;
 }
 
 export function validateExpression(expr: string): { valid: boolean; error?: string } {
   try {
-    const tokens = tokenizeExpr(expr);
-    for (let i = 0; i < tokens.length; i++) {
-      const tok = tokens[i];
-      if (tok.type === 'id') {
-        const next = tokens[i + 1];
-        if (next && next.type === 'paren' && next.val === '(') {
-          if (!ALLOWED_FUNCS.has(tok.val)) {
-            return { valid: false, error: `Unknown function "${tok.val}" in expression` };
-          }
-        } else {
-          if (!ALLOWED_VARS.has(tok.val)) {
-            return { valid: false, error: `Unknown variable "${tok.val}" in expression` };
-          }
-        }
-      }
-    }
+    compileExpression(expr);
     return { valid: true };
   } catch (err: any) {
     return { valid: false, error: err?.message ?? 'Invalid expression syntax' };
@@ -122,107 +358,8 @@ export function validateExpression(expr: string): { valid: boolean; error?: stri
 
 export function evaluateExpression(expr: string, ctx: ExprContext): number {
   try {
-    const tokens = tokenizeExpr(expr);
-    let pos = 0;
-
-    function parseAddSub(): number {
-      let left = parseMulDiv();
-      while (pos < tokens.length) {
-        const tok = tokens[pos];
-        if (tok.type === 'op' && (tok.val === '+' || tok.val === '-')) {
-          pos++;
-          const right = parseMulDiv();
-          left = tok.val === '+' ? left + right : left - right;
-        } else {
-          break;
-        }
-      }
-      return left;
-    }
-
-    function parseMulDiv(): number {
-      let left = parseUnary();
-      while (pos < tokens.length) {
-        const tok = tokens[pos];
-        if (tok.type === 'op' && (tok.val === '*' || tok.val === '/' || tok.val === '%' || tok.val === '^')) {
-          pos++;
-          const right = parseUnary();
-          if (tok.val === '*') left *= right;
-          else if (tok.val === '/') left = Math.abs(right) < 1e-12 ? 0 : left / right;
-          else if (tok.val === '%') left = Math.abs(right) < 1e-12 ? 0 : left % right;
-          else if (tok.val === '^') left = Math.pow(left, right);
-        } else {
-          break;
-        }
-      }
-      return left;
-    }
-
-    function parseUnary(): number {
-      const tok = tokens[pos];
-      if (tok && tok.type === 'op' && (tok.val === '+' || tok.val === '-')) {
-        pos++;
-        const v = parseUnary();
-        return tok.val === '-' ? -v : v;
-      }
-      return parsePrimary();
-    }
-
-    function parsePrimary(): number {
-      const tok = tokens[pos];
-      if (!tok) return 0;
-
-      if (tok.type === 'num') {
-        pos++;
-        return tok.val;
-      }
-
-      if (tok.type === 'paren' && tok.val === '(') {
-        pos++;
-        const val = parseAddSub();
-        if (tokens[pos]?.type === 'paren' && (tokens[pos] as any).val === ')') {
-          pos++;
-        }
-        return val;
-      }
-
-      if (tok.type === 'id') {
-        pos++;
-        const next = tokens[pos];
-        if (next && next.type === 'paren' && next.val === '(') {
-          pos++; // consume '('
-          const args: (number | string)[] = [];
-          while (pos < tokens.length) {
-            const peek = tokens[pos];
-            if (peek.type === 'paren' && peek.val === ')') {
-              pos++;
-              break;
-            }
-            if (peek.type === 'str') {
-              args.push(peek.val);
-              pos++;
-            } else if (peek.type === 'id' && tok.val === 'ease' && args.length === 0) {
-              args.push(peek.val);
-              pos++;
-            } else {
-              args.push(parseAddSub());
-            }
-            if (tokens[pos]?.type === 'comma') {
-              pos++;
-            }
-          }
-          return callFunc(tok.val, args, ctx);
-        } else {
-          return lookupVar(tok.val, ctx);
-        }
-      }
-
-      pos++;
-      return 0;
-    }
-
-    const res = parseAddSub();
-    return Number.isFinite(res) ? res : 0;
+    const fn = compileExpression(expr);
+    return fn(ctx);
   } catch {
     return 0;
   }

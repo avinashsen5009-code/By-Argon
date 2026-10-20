@@ -6,7 +6,7 @@ import { DEMO_HINGLISH_TRANSCRIPT, parseTranscript } from '../core/transcript.ts
 import { APP_NAME, type CompiledRecipe, type RecipeDocument } from '../core/types.ts';
 import { validateRecipe } from '../core/validate.ts';
 import { deleteProjectFromDb, saveProjectToDb, type StoredProject } from '../store/db.ts';
-import { getBuiltInSampleProjects, initializeProjectsStore } from '../store/projects.ts';
+import { getDefaultSampleProject, initializeProjectsStore } from '../store/projects.ts';
 import { ProjectDrawerModal } from './components/ProjectDrawerModal.tsx';
 import { ExportScreen } from './screens/ExportScreen.tsx';
 import { PreviewStageScreen } from './screens/PreviewStageScreen.tsx';
@@ -16,7 +16,7 @@ import { TranscriptPromptScreen } from './screens/TranscriptPromptScreen.tsx';
 export type ActiveTab = 'transcript' | 'recipe' | 'preview' | 'export';
 
 export const RecipeStudioApp: React.FC = () => {
-  const defaultSample = useMemo(() => getBuiltInSampleProjects()[0], []);
+  const defaultSample = useMemo(() => getDefaultSampleProject(), []);
   const [projects, setProjects] = useState<StoredProject[]>([defaultSample]);
   const [activeProject, setActiveProject] = useState<StoredProject>(defaultSample);
   const [activeTab, setActiveTab] = useState<ActiveTab>('transcript');
@@ -214,7 +214,7 @@ export const RecipeStudioApp: React.FC = () => {
       </header>
 
       {/* Main Content Container (1440px Desktop Split-Screen + Mobile Single-Hand Layout) */}
-      <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 sm:px-6 pt-5">
+      <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 sm:px-6 pt-5 pb-28 lg:pb-12">
         {/* Active Project Header Bar */}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 tabular-nums">
           <div className="flex flex-wrap items-center gap-2">
@@ -237,6 +237,8 @@ export const RecipeStudioApp: React.FC = () => {
           <PreviewStageScreen
             compiled={compiledRecipe}
             audioDataUrl={activeProject.audioDataUrl}
+            audioOffsetSec={activeProject.audioOffsetSec ?? 0}
+            audioPeaks={activeProject.audioPeaks}
             currentTime={currentTime}
             onChangeTime={setCurrentTime}
             onGoToExport={() => setActiveTab('export')}
@@ -257,10 +259,17 @@ export const RecipeStudioApp: React.FC = () => {
                   project={activeProject}
                   onUpdateProject={updateActiveProject}
                   onGoToPreviewStep={() => setActiveTab('preview')}
+                  onSeekToTime={(tSec) => setCurrentTime(tSec)}
                 />
               )}
               {activeTab === 'export' && (
-                <ExportScreen compiled={compiledRecipe} projectTitle={activeProject.title} />
+                <ExportScreen
+                  compiled={compiledRecipe}
+                  projectTitle={activeProject.title}
+                  audioDataUrl={activeProject.audioDataUrl}
+                  audioOffsetSec={activeProject.audioOffsetSec ?? 0}
+                  currentTime={currentTime}
+                />
               )}
             </div>
 
@@ -269,6 +278,8 @@ export const RecipeStudioApp: React.FC = () => {
               <PreviewStageScreen
                 compiled={compiledRecipe}
                 audioDataUrl={activeProject.audioDataUrl}
+                audioOffsetSec={activeProject.audioOffsetSec ?? 0}
+                audioPeaks={activeProject.audioPeaks}
                 currentTime={currentTime}
                 onChangeTime={setCurrentTime}
                 onGoToExport={() => setActiveTab('export')}

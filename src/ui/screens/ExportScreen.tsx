@@ -6,16 +6,31 @@ import {
   type ExportResult,
   exportRecipeVideo,
 } from '../../export/exporter.ts';
+import { isNativeAndroid, NativeVideoSink } from '../../native/bridge.ts';
+import { recordExportHistory, triggerHaptic } from '../../store/db.ts';
 
 interface ExportScreenProps {
   compiled: CompiledRecipe;
   projectTitle: string;
+  audioDataUrl?: string;
+  audioOffsetSec?: number;
+  currentTime?: number;
 }
 
-export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTitle }) => {
-  const [scaleFactor, setScaleFactor] = useState<1 | 0.6667 | 0.5>(1);
-  const [fpsChoice, setFpsChoice] = useState<30 | 60>(compiled.duration > 60 ? 30 : compiled.fps === 30 ? 30 : 60);
-  const [rangeMode, setRangeMode] = useState<'full' | 'quick3s' | 'segment60s'>('full');
+export const ExportScreen: React.FC<ExportScreenProps> = ({
+  compiled,
+  projectTitle,
+  audioDataUrl,
+  audioOffsetSec = 0,
+  currentTime = 0,
+}) => {
+  const [scaleFactor, setScaleFactor] = useState<1 | 0.6667 | 0.4444>(1);
+  const [fpsChoice, setFpsChoice] = useState<24 | 30 | 60>(
+    compiled.duration > 120 ? 30 : compiled.fps === 24 ? 24 : compiled.fps === 30 ? 30 : 60
+  );
+  const [bitratePreset, setBitratePreset] = useState<'auto' | 'high'>('auto');
+  const [containerChoice, setContainerChoice] = useState<'auto' | 'mp4' | 'webm' | 'webm-alpha'>('auto');
+  const [rangeMode, setRangeMode] = useState<'full' | 'currentScene' | 'segment60s' | 'quick3s'>('full');
   const [segmentIndex, setSegmentIndex] = useState(0);
   const [caps, setCaps] = useState<ExportCapabilities | null>(null);
   const [progress, setProgress] = useState<ExportProgressInfo | null>(null);
@@ -36,6 +51,12 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTit
     if (rangeMode === 'quick3s') {
       return [0, Math.min(3.0, compiled.duration)];
     }
+    if (rangeMode === 'currentScene') {
+      const sc =
+        compiled.scenes.find((s) => currentTime >= s.t0 && currentTime <= s.t1) ??
+        compiled.scenes[0];
+      return sc ? [sc.t0, sc.t1] : [0, compiled.duration];
+    }
     if (rangeMode === 'segment60s') {
       const from = segmentIndex * 60;
       const to = Math.min(compiled.duration, (segmentIndex + 1) * 60);
@@ -54,6 +75,16 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTit
     abortRef.current = controller;
 
     try {
+      let audioBlob: Blob | undefined;
+      if (audioDataUrl) {
+        try {
+          const resp = await fetch(audioDataUrl);
+          audioBlob = await resp.blob();
+        } catch {
+          // ignore
+        }
+      }
+
       const safeName = projectTitle
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
@@ -62,11 +93,28 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTit
         compiled,
         scaleFactor,
         fpsOverride: fpsChoice,
+        bitratePreset,
+        containerOverride: containerChoice,
         fromSec,
         toSec,
+        audioBlob,
+        audioOffsetSec,
         fileNameBase: `${safeName || 'recipe-video'}-${exportW}x${exportH}`,
         signal: controller.signal,
         onProgress: (info) => setProgress(info),
+      });
+      triggerHaptic(25);
+      await recordExportHistory({
+        id: `exp_${Date.now()}`,
+        projectId: safeName || 'default',
+        fileName: res.fileName,
+        mimeType: res.mimeType,
+        byteLength: res.byteLength,
+        durationSec: res.verification.actualDurationSec,
+        w: exportW,
+        h: exportH,
+        fps: fpsChoice,
+        createdAt: Date.now(),
       });
       setResult(res);
     } catch (err: any) {
@@ -82,17 +130,46 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTit
     abortRef.current?.abort();
   };
 
+  const handleShareResult = async () => {
+    if (!result) return;
+    if (isNativeAndroid() && result.nativeUri) {
+      try {
+        await NativeVideoSink.share({
+          uri: result.nativeUri,
+          mime: result.mimeType,
+        });
+        return;
+      } catch {
+        // Fallback to Web Share
+      }
+    }
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        const file = new File([result.blob], result.fileName, { type: result.mimeType });
+        await navigator.share({
+          title: result.fileName,
+          files: [file],
+        });
+      } catch {
+        // User dismissed share sheet
+      }
+    }
+  };
+
   const isRunning =
     progress?.phase === 'preparing' ||
     progress?.phase === 'rendering' ||
-    progress?.phase === 'muxing';
+    progress?.phase === 'muxing' ||
+    progress?.phase === 'verifying';
 
   return (
     <div className="flex flex-col gap-5">
       <div className="rounded-2xl border border-white/10 bg-[#131720] p-5">
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-white/10">
           <div>
-            <h2 className="font-display text-lg font-bold text-white">04. Offline Frame-Accurate Video Export</h2>
+            <h2 className="font-display text-lg font-bold text-white">
+              04. Offline Frame-Accurate Video Export
+            </h2>
             <p className="mt-0.5 text-xs text-slate-400">
               Renders identical deterministic pixels using WebCodecs hardware encoding and streaming MP4/WebM muxing.
             </p>
@@ -103,7 +180,7 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTit
               <span>Pipeline:</span>
               <span className="font-bold text-emerald-400">
                 {caps.supportsH264Mp4
-                  ? 'WebCodecs H.264 MP4'
+                  ? `WebCodecs H.264 MP4 (${caps.selectedVideoCodec})`
                   : caps.supportsVp9Webm
                   ? 'WebCodecs VP9 WebM'
                   : 'MediaRecorder Fallback (slower, lower quality)'}
@@ -113,16 +190,16 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTit
         </div>
 
         {/* Export Settings (Zero Sliders: Segmented Buttons Only) */}
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Resolution Scale */}
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Resolution Scale: 1080p, 720p, 480p */}
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-semibold text-slate-300">Output Resolution</span>
             <div className="grid grid-cols-3 gap-1.5">
               {(
                 [
-                  { scale: 1, label: '100% Full' },
+                  { scale: 1, label: '1080p Full' },
                   { scale: 0.6667, label: '720p HD' },
-                  { scale: 0.5, label: '540p Fast' },
+                  { scale: 0.4444, label: '480p Fast' },
                 ] as const
               ).map((opt) => (
                 <button
@@ -141,13 +218,13 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTit
             </div>
           </div>
 
-          {/* Export Frame Rate */}
+          {/* Export Frame Rate: 24, 30, 60 */}
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-semibold text-slate-300">
-              Export Frame Rate {compiled.duration > 60 ? '(30 fps recommended for long videos)' : ''}
+              Export Frame Rate {compiled.duration > 120 ? '(30 fps recommended for >2 min)' : ''}
             </span>
-            <div className="grid grid-cols-2 gap-2">
-              {([30, 60] as const).map((fps) => (
+            <div className="grid grid-cols-3 gap-1.5">
+              {([24, 30, 60] as const).map((fps) => (
                 <button
                   key={fps}
                   type="button"
@@ -164,13 +241,68 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTit
             </div>
           </div>
 
+          {/* Bitrate & Container */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold text-slate-300">Bitrate</span>
+              <div className="grid grid-cols-2 gap-1.5">
+                {(
+                  [
+                    { id: 'auto', label: 'Auto' },
+                    { id: 'high', label: 'High' },
+                  ] as const
+                ).map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => setBitratePreset(b.id)}
+                    className={`min-h-[48px] rounded-xl px-2 text-xs font-bold transition-colors ${
+                      bitratePreset === b.id
+                        ? 'bg-sky-500 text-slate-950'
+                        : 'bg-[#0B0D12] text-slate-300 border border-white/10 hover:border-white/25'
+                    }`}
+                  >
+                    {b.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-semibold text-slate-300">Container</span>
+              <div className="grid grid-cols-3 gap-1">
+                {(
+                  [
+                    { id: 'auto', label: 'MP4' },
+                    { id: 'webm', label: 'WebM' },
+                    { id: 'webm-alpha', label: 'Alpha' },
+                  ] as const
+                ).map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setContainerChoice(c.id)}
+                    className={`min-h-[48px] rounded-xl px-1.5 text-xs font-bold transition-colors whitespace-nowrap ${
+                      containerChoice === c.id
+                        ? 'bg-sky-500 text-slate-950'
+                        : 'bg-[#0B0D12] text-slate-300 border border-white/10 hover:border-white/25'
+                    }`}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
           {/* Export Range Scope */}
           <div className="flex flex-col gap-1.5">
             <span className="text-xs font-semibold text-slate-300">Export Range</span>
-            <div className="grid grid-cols-3 gap-1.5">
+            <div className="grid grid-cols-4 gap-1.5">
               {(
                 [
-                  { id: 'full', label: 'Full Video' },
+                  { id: 'full', label: 'Full' },
+                  { id: 'currentScene', label: 'Scene' },
                   { id: 'segment60s', label: '60s Part' },
                   { id: 'quick3s', label: '3s Test' },
                 ] as const
@@ -270,10 +402,14 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTit
                 className="h-full bg-emerald-400 transition-all"
               />
             </div>
-            <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
               <span>Elapsed: {progress.elapsedSeconds.toFixed(1)}s</span>
+              <span>Avg Frame: {progress.avgFrameMs.toFixed(1)}ms</span>
               <span>ETA: {progress.etaSeconds.toFixed(1)}s</span>
             </div>
+            {progress.message && (
+              <div className="mt-1.5 text-[11px] text-emerald-300">{progress.message}</div>
+            )}
           </div>
         )}
 
@@ -283,7 +419,7 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTit
           </div>
         )}
 
-        {/* Completed Video Download & Preview */}
+        {/* Completed Video Download, Verification & Share */}
         {result && (
           <div
             data-testid="export-result-card"
@@ -294,23 +430,35 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ compiled, projectTit
                 <div className="font-bold text-sm text-emerald-300">
                   Export Complete: {result.fileName}
                 </div>
-                <div className="mt-1 flex items-center gap-2 text-slate-300">
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-slate-300">
                   <span>{(result.byteLength / 1024).toFixed(1)} KB</span>
                   <span aria-hidden="true">·</span>
                   <span>{result.totalFrames} frames</span>
                   <span aria-hidden="true">·</span>
                   <span>{result.pipeline}</span>
                 </div>
+                <div className="mt-1 text-[11px] text-emerald-200">
+                  {result.verification.message}
+                </div>
               </div>
 
-              <a
-                href={result.url}
-                download={result.fileName}
-                data-testid="download-exported-video"
-                className="min-h-[48px] inline-flex items-center px-6 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-bold text-xs transition-colors whitespace-nowrap"
-              >
-                Download {result.fileName}
-              </a>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleShareResult}
+                  className="min-h-[48px] px-4 rounded-xl bg-white/10 hover:bg-white/15 text-white font-bold text-xs transition-colors"
+                >
+                  Share
+                </button>
+                <a
+                  href={result.url}
+                  download={result.fileName}
+                  data-testid="download-exported-video"
+                  className="min-h-[48px] inline-flex items-center px-6 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-bold text-xs transition-colors whitespace-nowrap"
+                >
+                  Download {result.fileName}
+                </a>
+              </div>
             </div>
           </div>
         )}

@@ -3,23 +3,29 @@ import { isNativeAndroid, NativeVideoSink, uint8ToBase64 } from '../native/bridg
 export interface StreamingSinkHandle {
   write(data: Uint8Array, position: number): void;
   finalize(): Promise<{ blob: Blob; nativeUri?: string; byteLength: number }>;
+  cancel(): Promise<void>;
 }
 
 /**
- * Creates a random-access streaming sink compatible with `mp4-muxer` and `webm-muxer` `StreamTarget`.
- * On Android native, mirrors chunks to `VideoSinkPlugin` while also building a downloadable Blob for preview.
+ * Creates a random-access streaming sink compatible with `mp4-muxer` (`fastStart: false`)
+ * and `webm-muxer` `StreamTarget`.
+ * Batches binary writes into 2 MB chunks (`chunkSize: 2 * 1024 * 1024` in `StreamTarget`)
+ * to keep the Capacitor native bridge fast (M14 & M15).
  */
 export async function createStreamingSink(
   fileName: string,
   mimeType: string
 ): Promise<StreamingSinkHandle> {
-  const sessionId = `sink_${Date.now()}`;
+  let handle = `sink_${Date.now()}`;
+  let nativePath: string | undefined;
   const useNative = isNativeAndroid();
   const pendingNativeWrites: Promise<any>[] = [];
 
   if (useNative) {
     try {
-      await NativeVideoSink.openSink({ sessionId, fileName });
+      const opened = await NativeVideoSink.open({ name: fileName, mime: mimeType });
+      handle = opened.handle || handle;
+      nativePath = opened.path;
     } catch {
       // Fallback to in-memory buffer if native plugin not attached
     }
@@ -41,16 +47,26 @@ export async function createStreamingSink(
 
   return {
     write(data: Uint8Array, position: number) {
-      const end = position + data.byteLength;
+      const pos = position >= 0 ? position : maxLength;
+      const end = pos + data.byteLength;
       ensureCapacity(end);
-      buffer.set(data, position);
+      buffer.set(data, pos);
       if (end > maxLength) maxLength = end;
 
       if (useNative) {
-        const b64 = uint8ToBase64(data);
-        pendingNativeWrites.push(
-          NativeVideoSink.writeChunk({ sessionId, data: b64, offset: position }).catch(() => {})
-        );
+        // Batch writes in up to 2 MB base64 slices across the bridge
+        const maxSlice = 2 * 1024 * 1024;
+        for (let offset = 0; offset < data.byteLength; offset += maxSlice) {
+          const slice = data.subarray(offset, Math.min(data.byteLength, offset + maxSlice));
+          const b64 = uint8ToBase64(slice);
+          pendingNativeWrites.push(
+            NativeVideoSink.write({
+              handle,
+              position: pos + offset,
+              data: b64,
+            }).catch(() => {})
+          );
+        }
       }
     },
 
@@ -61,16 +77,34 @@ export async function createStreamingSink(
       let nativeUri: string | undefined;
       if (useNative) {
         try {
-          const res = await NativeVideoSink.closeSink({ sessionId, mimeType });
-          nativeUri = res.uri;
+          await NativeVideoSink.close({ handle });
+          const saved = await NativeVideoSink.saveToMovies({
+            handle,
+            path: nativePath,
+            displayName: fileName,
+            mime: mimeType,
+          });
+          nativeUri = saved.uri;
         } catch {
-          // Ignore native close failure
+          // Ignore native save failure in web preview
         }
       }
 
       const finalView = buffer.subarray(0, maxLength);
       const blob = new Blob([finalView], { type: mimeType });
       return { blob, nativeUri, byteLength: maxLength };
+    },
+
+    async cancel() {
+      if (useNative) {
+        try {
+          await NativeVideoSink.close({ handle });
+        } catch {
+          // Ignore
+        }
+      }
+      buffer = new Uint8Array(0);
+      maxLength = 0;
     },
   };
 }

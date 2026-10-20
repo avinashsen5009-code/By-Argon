@@ -1,4 +1,12 @@
-import type { CapacitorConfig } from '@capacitor/cli';
+export interface CapacitorConfig {
+  appId: string;
+  appName: string;
+  webDir: string;
+  server?: {
+    androidScheme?: string;
+  };
+  plugins?: Record<string, Record<string, unknown>>;
+}
 
 const config: CapacitorConfig = {
   appId: 'app.recipestudio.video',

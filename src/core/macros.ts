@@ -523,29 +523,61 @@ export function evaluateLayerMotions(
     .sort((a, b) => a.atSec - b.atSec);
 
   if (toMacros.length > 0) {
-    let curX = restX;
-    let curY = restY;
-    let curScale = restScale;
-    let curRot = restRot;
-    let curOp = restOp;
+    // Evaluate `to` chain at any timestamp `queryT` so overlapping `to` macros
+    // start from the exact value reached at their own start time (`tm.atSec`).
+    type ToState = { x: number; y: number; scale: number; rot: number; op: number };
+    const compiledChain: {
+      atSec: number;
+      dur: number;
+      easeName: string;
+      from: ToState;
+      to: Partial<ToState>;
+    }[] = [];
+
+    const evalChainAt = (qT: number): ToState => {
+      let st: ToState = {
+        x: restX,
+        y: restY,
+        scale: restScale,
+        rot: restRot,
+        op: restOp,
+      };
+      for (const seg of compiledChain) {
+        if (qT <= seg.atSec) break;
+        const u = clamp((qT - seg.atSec) / seg.dur, 0, 1);
+        const f = ease(seg.easeName, u);
+        if (seg.to.x !== undefined) st.x = lerp(seg.from.x, seg.to.x, f);
+        if (seg.to.y !== undefined) st.y = lerp(seg.from.y, seg.to.y, f);
+        if (seg.to.scale !== undefined) st.scale = lerp(seg.from.scale, seg.to.scale, f);
+        if (seg.to.rot !== undefined) st.rot = lerp(seg.from.rot, seg.to.rot, f);
+        if (seg.to.op !== undefined) st.op = lerp(seg.from.op, seg.to.op, f);
+      }
+      return st;
+    };
 
     for (const tm of toMacros) {
-      if (tGlobal <= tm.atSec) break;
-      const dur = Math.max(1e-4, tm.dur ?? 0.4);
-      const u = clamp((tGlobal - tm.atSec) / dur, 0, 1);
-      const f = ease(tm.ease || 'inOutCubic', u);
-      if (typeof tm.x === 'number') curX = lerp(curX, tm.x, f);
-      if (typeof tm.y === 'number') curY = lerp(curY, tm.y, f);
-      if (typeof tm.scale === 'number') curScale = lerp(curScale, tm.scale, f);
-      if (typeof tm.rot === 'number') curRot = lerp(curRot, tm.rot, f);
-      if (typeof tm.opacity === 'number') curOp = lerp(curOp, tm.opacity, f);
+      const fromState = evalChainAt(tm.atSec);
+      compiledChain.push({
+        atSec: tm.atSec,
+        dur: Math.max(1e-4, tm.dur ?? 0.4),
+        easeName: tm.ease || 'inOutCubic',
+        from: fromState,
+        to: {
+          x: typeof tm.x === 'number' ? tm.x : undefined,
+          y: typeof tm.y === 'number' ? tm.y : undefined,
+          scale: typeof tm.scale === 'number' ? tm.scale : undefined,
+          rot: typeof tm.rot === 'number' ? tm.rot : undefined,
+          op: typeof tm.opacity === 'number' ? tm.opacity : undefined,
+        },
+      });
     }
 
-    result.dx += curX - restX;
-    result.dy += curY - restY;
-    result.scaleMult *= restScale !== 0 ? curScale / restScale : curScale;
-    result.rotDelta += curRot - restRot;
-    result.opacityMult *= restOp !== 0 ? curOp / restOp : curOp;
+    const finalTo = evalChainAt(tGlobal);
+    result.dx += finalTo.x - restX;
+    result.dy += finalTo.y - restY;
+    result.scaleMult *= restScale !== 0 ? finalTo.scale / restScale : finalTo.scale;
+    result.rotDelta += finalTo.rot - restRot;
+    result.opacityMult *= restOp !== 0 ? finalTo.op / restOp : finalTo.op;
   }
 
   for (const m of layer.resolvedMotions) {

@@ -141,8 +141,12 @@ export interface TextAnimSpec {
 export interface FigureJoints {
   armR?: number;
   armL?: number;
+  elbowR?: number;
+  elbowL?: number;
   legR?: number;
   legL?: number;
+  kneeR?: number;
+  kneeL?: number;
   torso?: number;
   head?: number;
 }
@@ -162,12 +166,13 @@ export interface GroupLayout {
   type: 'row' | 'column' | 'grid';
   gap?: number;
   cols?: number;
-  align?: 'center' | 'left' | 'right' | 'top' | 'bottom';
+  align?: 'center' | 'left' | 'right' | 'top' | 'bottom' | 'start' | 'end' | 'stretch';
 }
 
 export interface ParticleEmitter {
   shape?: 'circle' | 'rect' | 'point' | 'ring';
   count?: number;
+  rate?: number;
   life?: [number, number] | number;
   speed?: [number, number] | number;
   angle?: [number, number] | number;
@@ -327,6 +332,7 @@ export interface SceneTransition {
 
 export interface Scene {
   id: string;
+  name?: string;
   t: [TimeValue, TimeValue];
   transition?: SceneTransition;
   layers: (Layer | LayerPatch)[];
@@ -348,6 +354,7 @@ export interface AssetDef {
   id: string;
   type: 'image' | 'video' | 'audio' | 'svg';
   file: string;
+  src?: string;
   prompt?: string;
   dataUrl?: string;
 }
@@ -383,7 +390,7 @@ export interface RecipeMeta {
   fps?: number;
   duration?: number;
   lang?: ScreenLang;
-  part: PartMeta;
+  part?: PartMeta;
 }
 
 export interface ThemeSpec {
@@ -416,6 +423,7 @@ export interface SentenceItem {
   text: string;
   s: number;
   e: number;
+  estimated?: boolean;
 }
 
 export interface WordItem {
@@ -423,6 +431,7 @@ export interface WordItem {
   w: string;
   s: number;
   e: number;
+  estimated?: boolean;
 }
 
 export interface TranscriptData {
@@ -430,6 +439,8 @@ export interface TranscriptData {
   duration: number;
   sentences: SentenceItem[];
   words: WordItem[];
+  estimated?: boolean;
+  warnings?: string[];
 }
 
 export type ThemeTokens = Record<string, string>;
@@ -499,4 +510,7 @@ export interface ValidationIssue {
   layerId?: string;
   sceneId?: string;
   path?: string;
+  time?: number;
+  suggestedFix?: string;
+  isUnknownName?: boolean;
 }

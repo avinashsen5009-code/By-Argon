@@ -16,6 +16,27 @@ export function resolveFontFamily(font: string | undefined): string {
   }
 }
 
+export function containsDevanagari(text: string): boolean {
+  return /[\u0900-\u097F]/.test(text);
+}
+
+/**
+ * Waits for `document.fonts.load(...)` for every bundled font family before the first frame and before export (M8).
+ */
+export async function ensureFontsLoaded(): Promise<void> {
+  if (typeof document === 'undefined' || !document.fonts?.load) return;
+  try {
+    await Promise.all([
+      document.fonts.load("800 48px 'Sora'"),
+      document.fonts.load("700 32px 'Inter'"),
+      document.fonts.load("700 36px 'Noto Sans Devanagari'"),
+      document.fonts.ready,
+    ]);
+  } catch {
+    // Ignore in environments where FontFaceSet is stubbed
+  }
+}
+
 export interface MeasuredTextLayout {
   fontSize: number;
   lineHeightPx: number;
@@ -27,9 +48,17 @@ export interface MeasuredTextLayout {
     cleanWord: string;
     x: number;
     y: number;
+    leftX: number;
     w: number;
     h: number;
   }>;
+}
+
+const MAX_TEXT_CACHE_SIZE = 256;
+const textLayoutCache = new Map<string, MeasuredTextLayout>();
+
+export function clearTextLayoutCache(): void {
+  textLayoutCache.clear();
 }
 
 export function measureAndLayoutText(
@@ -44,6 +73,14 @@ export function measureAndLayoutText(
   fitShrink = false,
   maxLines = 4
 ): MeasuredTextLayout {
+  const cacheKey = `${text}|${font ?? 'display'}|${weight}|${initialSize}|${Math.round(boxW)}|${align}|${lineHeightMult}|${fitShrink ? 1 : 0}|${maxLines}`;
+  const cached = textLayoutCache.get(cacheKey);
+  if (cached) {
+    textLayoutCache.delete(cacheKey);
+    textLayoutCache.set(cacheKey, cached);
+    return cached;
+  }
+
   const family = resolveFontFamily(font);
   let fontSize = Math.max(12, initialSize);
 
@@ -58,18 +95,34 @@ export function measureAndLayoutText(
         lines.push('');
         continue;
       }
-      let currentLine = words[0];
-      for (let i = 1; i < words.length; i++) {
-        const candidate = `${currentLine} ${words[i]}`;
+      let currentLine = '';
+
+      for (let i = 0; i < words.length; i++) {
+        const word = words[i];
+        const candidate = currentLine ? `${currentLine} ${word}` : word;
         const m = ctx.measureText(candidate).width;
+
         if (m <= boxW || fitShrink) {
           currentLine = candidate;
+        } else if (!currentLine && ctx.measureText(word).width > boxW && !fitShrink) {
+          // Character-level fallback wrapping for long CJK/unbroken tokens
+          let charChunk = '';
+          for (const ch of Array.from(word)) {
+            const nextChunk = charChunk + ch;
+            if (ctx.measureText(nextChunk).width > boxW && charChunk.length > 0) {
+              lines.push(charChunk);
+              charChunk = ch;
+            } else {
+              charChunk = nextChunk;
+            }
+          }
+          currentLine = charChunk;
         } else {
-          lines.push(currentLine);
-          currentLine = words[i];
+          if (currentLine) lines.push(currentLine);
+          currentLine = word;
         }
       }
-      lines.push(currentLine);
+      if (currentLine) lines.push(currentLine);
     }
 
     let maxW = 0;
@@ -81,11 +134,31 @@ export function measureAndLayoutText(
   };
 
   let wrapped = computeWrap(fontSize);
+
+  // M8: Binary search on fontSize when fit:"shrink" (or single-line overflow)
   if ((fitShrink || wrapped.maxW > boxW) && wrapped.maxW > boxW && boxW > 20) {
-    const ratio = (boxW * 0.94) / Math.max(1, wrapped.maxW);
-    fontSize = Math.max(14, Math.floor(fontSize * ratio));
-    wrapped = computeWrap(fontSize);
+    let low = 12;
+    let high = fontSize;
+    let bestSize = 12;
+    let bestWrap = wrapped;
+
+    for (let iter = 0; iter < 9; iter++) {
+      const mid = Math.floor((low + high) * 0.5);
+      const testWrap = computeWrap(mid);
+      const fitsWidth = testWrap.maxW <= boxW * 0.96;
+      const fitsLines = maxLines <= 0 || testWrap.lines.length <= maxLines;
+      if (fitsWidth && fitsLines) {
+        bestSize = mid;
+        bestWrap = testWrap;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    fontSize = bestSize;
+    wrapped = bestWrap;
   }
+
   if (maxLines > 0 && wrapped.lines.length > maxLines) {
     wrapped.lines = wrapped.lines.slice(0, maxLines);
   }
@@ -107,26 +180,32 @@ export function measureAndLayoutText(
         : -lineW * 0.5;
     const lineY = startY + lineIdx * lineHeightPx;
 
+    // Prefix measurement for exact word x-ranges (M8)
     const tokens = line.split(/(\s+)/);
-    let cursorX = lineStartX;
+    let prefix = '';
     for (const tok of tokens) {
-      const tw = ctx.measureText(tok).width;
+      const prefixW = prefix.length > 0 ? ctx.measureText(prefix).width : 0;
+      const fullWithTokW = ctx.measureText(prefix + tok).width;
+      const tw = Math.max(0, fullWithTokW - prefixW);
+      const leftX = lineStartX + prefixW;
+
       if (tok.trim().length > 0) {
         const cleanWord = tok.replace(/^[.,!?;:"'()[\]]+|[.,!?;:"'()[\]]+$/g, '');
         wordBoxes.push({
           word: tok,
           cleanWord,
-          x: cursorX + tw * 0.5,
+          x: leftX + tw * 0.5,
           y: lineY,
+          leftX,
           w: tw,
           h: fontSize,
         });
       }
-      cursorX += tw;
+      prefix += tok;
     }
   });
 
-  return {
+  const layout: MeasuredTextLayout = {
     fontSize,
     lineHeightPx,
     lines: wrapped.lines,
@@ -134,10 +213,18 @@ export function measureAndLayoutText(
     totalHeight,
     wordBoxes,
   };
+
+  if (textLayoutCache.size >= MAX_TEXT_CACHE_SIZE) {
+    const oldest = textLayoutCache.keys().next().value;
+    if (oldest) textLayoutCache.delete(oldest);
+  }
+  textLayoutCache.set(cacheKey, layout);
+  return layout;
 }
 
 /**
  * Draws a `text` layer centered around local (0,0), including optional `plate`, inline `highlight` words,
+ * `letterSpacing` (automatically disabled for Devanagari so conjuncts never break),
  * `textAnim`, and text enter presets (`typeOn`, `charIn`, `charFade`, `charPop`, `wordIn`, `wordFade`, `wordPop`, `lineIn`).
  */
 export function drawTextLayer(
@@ -201,12 +288,18 @@ export function drawTextLayer(
     }
   }
 
-  const family = resolveFontFamily(layer.font);
+  const isDevanagari = layer.font === 'hindi' || containsDevanagari(rawText);
+  const family = resolveFontFamily(isDevanagari && !layer.font ? 'hindi' : layer.font);
   ctx.save();
   ctx.font = `${weight} ${layout.fontSize}px ${family}`;
   ctx.textBaseline = 'middle';
 
-  // Determine split mode from either `layer.textAnim` or `textPresetType`
+  // M8: letterSpacing is disabled automatically for Devanagari because it breaks conjuncts
+  if ('letterSpacing' in ctx) {
+    const rawLs = typeof layer.letterSpacing === 'number' ? layer.letterSpacing : 0;
+    (ctx as any).letterSpacing = isDevanagari ? '0px' : `${rawLs}px`;
+  }
+
   const animSpec = layer.textAnim;
   const activePreset = textPresetType && textPresetProgress < 1 ? textPresetType : undefined;
 
@@ -288,10 +381,11 @@ export function drawTextLayer(
 
   // Character or line rendering
   const isCharSplit =
-    animSpec?.split === 'char' ||
-    activePreset === 'charIn' ||
-    activePreset === 'charFade' ||
-    activePreset === 'charPop';
+    (animSpec?.split === 'char' ||
+      activePreset === 'charIn' ||
+      activePreset === 'charFade' ||
+      activePreset === 'charPop') &&
+    !isDevanagari; // Keep Devanagari conjuncts intact at word/line level
 
   const startY = -layout.totalHeight * 0.5 + layout.lineHeightPx * 0.5;
   let globalCharIdx = 0;
@@ -349,7 +443,7 @@ export function drawTextLayer(
       }
     } else {
       ctx.save();
-      if (activePreset === 'lineIn') {
+      if (activePreset === 'lineIn' || animSpec?.split === 'line') {
         const lStart = (lineIdx / Math.max(1, layout.lines.length)) * 0.4;
         const u = clamp((textPresetProgress - lStart) / 0.6, 0, 1);
         const f = ease('outExpo', u);
@@ -374,8 +468,10 @@ export function drawTextLayer(
 }
 
 /**
- * Draws a `highlight` layer (`target` text layer id, `word`, `kind`: "underline"|"box"|"marker", `at`, `dur`, `color`).
- * Measures the target word inside the target text layer and draws the growing highlight.
+ * M8 Highlight Layer:
+ * Measures the target word's x-range via prefix measurement (`match.leftX .. match.leftX + match.w`).
+ * - `underline` sits at `baseline + 0.14 * size`, thickness >= 8 px, grows left-pinned.
+ * - `box` is centred about `0.30 * size` above the text baseline / around text centre, grows left-pinned.
  */
 export function drawHighlightLayer(
   ctx: Any2DContext,
@@ -416,30 +512,33 @@ export function drawHighlightLayer(
 
   const col = resolveColorToken(layer.color || '@acc', tokens);
   const kind = layer.kind || 'underline';
+  const size = layout.fontSize;
+  const baselineY = match.y + size * 0.36;
 
   ctx.save();
   if (kind === 'underline') {
+    const thickness = Math.max(8, Number(layer.thickness ?? 8));
     const uw = (match.w + 12) * progress;
-    const ux = match.x - (match.w + 12) * 0.5;
-    const uy = match.y + match.h * 0.52;
+    const ux = match.leftX - 6;
+    const uy = baselineY + size * 0.14;
     ctx.fillStyle = col;
-    ctx.shadowColor = col;
-    ctx.shadowBlur = 12;
-    traceRoundedRect(ctx, ux, uy, Math.max(6, uw), 8, 4);
+    traceRoundedRect(ctx, ux, uy, Math.max(6, uw), thickness, thickness * 0.5);
     ctx.fill();
   } else if (kind === 'box') {
     const bw = (match.w + 24) * progress;
-    const bh = match.h * 1.16;
+    const bh = size * 1.16;
+    const boxCenterY = baselineY - size * 0.3;
     ctx.strokeStyle = col;
-    ctx.lineWidth = 4;
-    traceRoundedRect(ctx, match.x - (match.w + 24) * 0.5, match.y - bh * 0.5, bw, bh, 12);
+    ctx.lineWidth = Math.max(4, Number(layer.thickness ?? 4));
+    traceRoundedRect(ctx, match.leftX - 12, boxCenterY - bh * 0.5, bw, bh, 12);
     ctx.stroke();
   } else if (kind === 'marker') {
     const mw = (match.w + 20) * progress;
-    const mh = match.h * 1.05;
+    const mh = size * 1.05;
+    const boxCenterY = baselineY - size * 0.3;
     ctx.globalAlpha *= 0.32;
     ctx.fillStyle = col;
-    traceRoundedRect(ctx, match.x - (match.w + 20) * 0.5, match.y - mh * 0.5, mw, mh, 10);
+    traceRoundedRect(ctx, match.leftX - 10, boxCenterY - mh * 0.5, mw, mh, 10);
     ctx.fill();
   }
   ctx.restore();
@@ -447,6 +546,7 @@ export function drawHighlightLayer(
 
 /**
  * Draws a `captions` layer driven by the project transcript at global time `t`.
+ * Supports styles: `word-pop`, `karaoke`, `line`, `box`.
  */
 export function drawCaptionsLayer(
   ctx: Any2DContext,
@@ -464,7 +564,6 @@ export function drawCaptionsLayer(
   const activeCol = resolveColorToken(layer.activeColor || '@acc', tokens);
   const baseCol = resolveColorToken(layer.color || '@ink', tokens);
 
-  // Find active word or closest word at tGlobal
   const activeIdx = transcript.words.findIndex((w) => tGlobal >= w.s && tGlobal <= w.e);
   if (activeIdx === -1) return;
 
@@ -498,13 +597,21 @@ export function drawCaptionsLayer(
   for (const wItem of chunkWords) {
     const ww = ctx.measureText(wItem.w).width;
     const isCurrent = wItem.i === transcript.words[activeIdx].i;
+    const isPastOrCurrent = wItem.i <= transcript.words[activeIdx].i;
+
     ctx.save();
     ctx.translate(cursorX + ww * 0.5, yPx);
     if (isCurrent && layer.style === 'word-pop') {
       ctx.scale(1.14, 1.14);
     }
     ctx.textAlign = 'center';
-    ctx.fillStyle = isCurrent ? activeCol : baseCol;
+    if (layer.style === 'karaoke') {
+      ctx.fillStyle = isPastOrCurrent ? activeCol : baseCol;
+    } else if (layer.style === 'line') {
+      ctx.fillStyle = baseCol;
+    } else {
+      ctx.fillStyle = isCurrent ? activeCol : baseCol;
+    }
     ctx.fillText(wItem.w, 0, 0);
     ctx.restore();
     cursorX += ww + spaceW;

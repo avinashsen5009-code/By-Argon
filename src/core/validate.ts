@@ -32,7 +32,7 @@ import {
   TRANSITION_NAMES,
 } from './vocab.ts';
 
-const FORBIDDEN_CODE_IDENTIFIERS = [
+export const FORBIDDEN_CODE_IDENTIFIERS = [
   'Math.random',
   'Date',
   'window',
@@ -45,7 +45,39 @@ const FORBIDDEN_CODE_IDENTIFIERS = [
   'localStorage',
   'setTimeout',
   'requestAnimationFrame',
+  'constructor',
+  '__proto__',
+  'prototype',
+  'globalThis',
+  'self',
+  'postMessage',
+  'importScripts',
+  'WebSocket',
+  'indexedDB',
+  'caches',
+  'navigator',
+  'location',
 ];
+
+const UNKNOWN_VOCAB_CODES = new Set([
+  'UNKNOWN_LAYER_TYPE',
+  'UNKNOWN_SHAPE_KIND',
+  'UNKNOWN_ICON_NAME',
+  'UNKNOWN_CHART_KIND',
+  'UNKNOWN_BACKGROUND_KIND',
+  'UNKNOWN_FIGURE_POSE',
+  'UNKNOWN_HIGHLIGHT_KIND',
+  'UNKNOWN_CAPTION_STYLE',
+  'UNKNOWN_STYLE_TOKEN',
+  'UNKNOWN_MACRO',
+  'UNKNOWN_EASING',
+  'UNKNOWN_ENTER_PRESET',
+  'UNKNOWN_EXIT_PRESET',
+  'UNKNOWN_EMPH',
+  'UNKNOWN_FX',
+  'UNKNOWN_COMPONENT_DEF',
+  'UNKNOWN_TRANSITION',
+]);
 
 const BROWSER_DOT_HEXES = new Set(['#FF5F57', '#FEBC2E', '#28C840', '#FFFFFF']);
 
@@ -914,8 +946,39 @@ export function validateRecipe(
       issues.push({
         severity: 'warning',
         code: 'BEAT_GAP_WARNING',
+        time: sortedBeats[i],
         message: `Beat gap of ${gap.toFixed(2)}s between ${sortedBeats[i].toFixed(2)}s and ${sortedBeats[i + 1].toFixed(2)}s exceeds 1.2s pace rule`,
+        suggestedFix: `Add a motion macro (bump, pop, highlight) or layer entrance between ${sortedBeats[i].toFixed(2)}s and ${sortedBeats[i + 1].toFixed(2)}s.`,
       });
+    }
+  }
+
+  // Enrich every issue with time, suggestedFix, and isUnknownName
+  const sceneStartMap = new Map<string, number>();
+  const layerTimeMap = new Map<string, number>();
+  for (const scene of doc.scenes || []) {
+    const st0 = resolveTimeValue(scene.t?.[0], transcript, partFrom).seconds;
+    sceneStartMap.set(scene.id, st0);
+    for (const entry of scene.layers || []) {
+      if ('patch' in entry) continue;
+      const lt0 = entry.t?.[0] !== undefined ? resolveTimeValue(entry.t[0], transcript, st0).seconds : st0;
+      layerTimeMap.set(entry.id, lt0);
+    }
+  }
+
+  for (const iss of issues) {
+    if (iss.time === undefined) {
+      if (iss.layerId && layerTimeMap.has(iss.layerId)) {
+        iss.time = layerTimeMap.get(iss.layerId);
+      } else if (iss.sceneId && sceneStartMap.has(iss.sceneId)) {
+        iss.time = sceneStartMap.get(iss.sceneId);
+      } else {
+        iss.time = partFrom;
+      }
+    }
+    iss.isUnknownName = UNKNOWN_VOCAB_CODES.has(iss.code);
+    if (!iss.suggestedFix) {
+      iss.suggestedFix = getSuggestedFixForIssue(iss);
     }
   }
 
@@ -923,22 +986,104 @@ export function validateRecipe(
   return { doc, issues, valid: !hasErrors };
 }
 
+function getSuggestedFixForIssue(iss: ValidationIssue): string {
+  switch (iss.code) {
+    case 'FRACTIONAL_PIXEL_SIZE':
+      return 'Convert fractional 0..1 size into pixel dimensions (e.g., w: 400, h: 120). Only x and y use 0..1 fractions.';
+    case 'THIN_LINE_HEIGHT':
+      return 'Set line or underline height h >= 6 px (or use Auto-Repair).';
+    case 'IMAGE_BOTH_W_AND_H':
+      return 'Remove "h" from the image/video layer and specify only "w" in pixels.';
+    case 'INVALID_COLOR_TOKEN':
+      return 'Use a valid @token (@acc, @ink, @surf, @warn, @second, @bg) or 6-digit #RRGGBB hex.';
+    case 'FORBIDDEN_CODE_IDENTIFIER':
+      return 'Replace Math.random/Date/window with deterministic api.rand(seed) or api.noise(x, seed).';
+    case 'ENTER_AND_ENTRANCE_MACRO':
+      return 'Remove "enter" or set "enter": "none" when using an entrance macro (pop, slam, drop, slide, rise).';
+    case 'FINAL_SCENE_EXIT_NOT_NONE':
+      return 'Set "exit": "none" on layers that stay on screen until the end of the final scene.';
+    case 'SAFE_AREA_WARNING':
+      return 'Move x/y closer to 0.10..0.90 or reduce w/h so the layer stays inside the 2.5% safe margin.';
+    case 'TEXT_WIDTH_TOO_SMALL':
+      return 'Add "fit": "shrink" or increase "w" on the text layer.';
+    default:
+      if (UNKNOWN_VOCAB_CODES.has(iss.code)) {
+        return 'Replace the unknown name with one of the built-in SPEC Part A vocabulary names.';
+      }
+      return 'Update the property in JSON to match SPEC Part A rules and re-validate.';
+  }
+}
+
+/**
+ * M12 Lenient Preview check:
+ * Returns true if there are zero errors OR if every error is of "unknown vocabulary name" type
+ * (so the preview can still play while skipping unknown layers with a visible marker).
+ */
+export function canPlayLenientPreview(issues: ValidationIssue[]): {
+  canPreview: boolean;
+  hasUnknownOnlyErrors: boolean;
+  blockingErrors: ValidationIssue[];
+} {
+  const errors = issues.filter((i) => i.severity === 'error');
+  if (errors.length === 0) {
+    return { canPreview: true, hasUnknownOnlyErrors: false, blockingErrors: [] };
+  }
+  const nonVocabErrors = errors.filter((e) => !e.isUnknownName && !UNKNOWN_VOCAB_CODES.has(e.code));
+  return {
+    canPreview: nonVocabErrors.length === 0,
+    hasUnknownOnlyErrors: nonVocabErrors.length === 0,
+    blockingErrors: nonVocabErrors,
+  };
+}
+
 /**
  * Formats SPEC Part B — Fix Prompt for pasting back into any AI chat when errors occur.
+ * Auto-trims to the relevant scene snippet when `doc` is large (M12).
  */
-export function buildFixPrompt(issues: ValidationIssue[]): string {
+export function buildFixPrompt(
+  arg1: ValidationIssue[] | string,
+  arg2?: RecipeDocument | ValidationIssue[] | string
+): string {
+  const issues: ValidationIssue[] = Array.isArray(arg1)
+    ? arg1
+    : Array.isArray(arg2)
+    ? arg2
+    : [];
+  const docOrRaw = Array.isArray(arg1) ? arg2 : arg1;
+  let doc: RecipeDocument | undefined;
+  if (docOrRaw && typeof docOrRaw === 'object' && !Array.isArray(docOrRaw)) {
+    doc = docOrRaw as RecipeDocument;
+  } else if (typeof docOrRaw === 'string') {
+    try {
+      doc = JSON.parse(docOrRaw) as RecipeDocument;
+    } catch {
+      // ignore
+    }
+  }
+
   const errorLines = issues
     .map((iss, idx) => {
       const loc = [
         iss.sceneId ? `scene:${iss.sceneId}` : '',
         iss.layerId ? `layer:${iss.layerId}` : '',
         iss.path ? `prop:${iss.path}` : '',
+        iss.time !== undefined ? `t:${iss.time.toFixed(2)}s` : '',
       ]
         .filter(Boolean)
         .join(' ');
-      return `${idx + 1}. [${iss.severity.toUpperCase()} ${iss.code}] ${loc ? `(${loc}) ` : ''}${iss.message}`;
+      const fixHint = iss.suggestedFix ? ` -> Fix: ${iss.suggestedFix}` : '';
+      return `${idx + 1}. [${iss.severity.toUpperCase()} ${iss.code}] ${loc ? `(${loc}) ` : ''}${iss.message}${fixHint}`;
     })
     .join('\n');
 
-  return `Your RECIPE v3.1 JSON had these validation errors. Fix ONLY these. Return the complete corrected JSON (same part and range), nothing else, no explanation:\n\n${errorLines}`;
+  let snippetBlock = '';
+  if (doc && Array.isArray(doc.scenes) && doc.scenes.length > 2) {
+    const affectedSceneIds = new Set(issues.map((i) => i.sceneId).filter(Boolean));
+    const relevantScenes = doc.scenes.filter((s) => affectedSceneIds.has(s.id));
+    if (relevantScenes.length > 0 && relevantScenes.length < doc.scenes.length) {
+      snippetBlock = `\n\nRELEVANT SCENE SNIPPET(S) TO FIX:\n${JSON.stringify(relevantScenes, null, 2)}`;
+    }
+  }
+
+  return `Your RECIPE v3.1 JSON had these validation errors. Fix ONLY these. Return the complete corrected JSON (same part and range), nothing else, no explanation:\n\n${errorLines}${snippetBlock}`;
 }

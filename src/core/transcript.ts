@@ -4,7 +4,7 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function parseTimestampToSeconds(str: string): number {
+export function parseTimestampToSeconds(str: string): number {
   const clean = str.trim().replace(',', '.');
   const parts = clean.split(':').map((p) => parseFloat(p));
   if (parts.some((n) => Number.isNaN(n))) return 0;
@@ -20,12 +20,14 @@ function parseTimestampToSeconds(str: string): number {
 /**
  * Spreads words inside a sentence interval [s, e] proportionally by character count
  * per SPEC Part A Section 2 ("spread time inside each sentence by character count").
+ * Marks estimated: true on every word.
  */
 function spreadWordsAcrossSentence(
   text: string,
   s: number,
   e: number,
-  startWordIdx: number
+  startWordIdx: number,
+  estimated = true
 ): WordItem[] {
   const rawTokens = text
     .trim()
@@ -35,7 +37,7 @@ function spreadWordsAcrossSentence(
 
   if (rawTokens.length === 0) return [];
   const totalChars = Math.max(1, rawTokens.reduce((acc, w) => acc + w.length, 0));
-  const span = Math.max(0.1, e - s);
+  const span = Math.max(0.05, e - s);
   let curChar = 0;
 
   return rawTokens.map((w, idx) => {
@@ -46,26 +48,158 @@ function spreadWordsAcrossSentence(
       i: startWordIdx + idx,
       w,
       s: round2(wStart),
-      e: round2(Math.max(wStart + 0.05, wEnd)),
+      e: round2(Math.max(wStart + 0.04, wEnd)),
+      estimated,
     };
   });
 }
 
 /**
- * Parses a transcript from any common format:
- * 1. JSON with `{ sentences, words }` or Whisper `{ segments, words }` or array of `{ w/word, s/start, e/end }`
- * 2. SRT or WebVTT subtitle blocks (`00:00:00,000 --> 00:00:03,100`)
- * 3. Timestamped lines (`0:00.00 - 0:03.10 Text` or `[00:00] Text` or `0.22 sequence`)
- * 4. Plain text (spreads sentences and words across `fallbackDuration`)
+ * Groups word items into sentences, breaking at punctuation (. ? ! | ।)
+ * OR at pauses longer than 0.6 s per M10.
+ */
+function buildSentencesFromWords(words: WordItem[], rawWordsWithPunct?: string[]): SentenceItem[] {
+  if (words.length === 0) return [];
+  const sentences: SentenceItem[] = [];
+  let chunk: WordItem[] = [];
+  let rawChunk: string[] = [];
+
+  const flushChunk = () => {
+    if (chunk.length === 0) return;
+    sentences.push({
+      i: sentences.length,
+      text: rawChunk.length === chunk.length ? rawChunk.join(' ') : chunk.map((c) => c.w).join(' '),
+      s: chunk[0].s,
+      e: chunk[chunk.length - 1].e,
+      estimated: chunk.some((c) => c.estimated),
+    });
+    chunk = [];
+    rawChunk = [];
+  };
+
+  for (let idx = 0; idx < words.length; idx++) {
+    const w = words[idx];
+    const rawTok = rawWordsWithPunct?.[idx] ?? w.w;
+    if (chunk.length > 0) {
+      const prev = chunk[chunk.length - 1];
+      const pause = w.s - prev.e;
+      if (pause > 0.6) {
+        flushChunk();
+      }
+    }
+    chunk.push(w);
+    rawChunk.push(rawTok);
+
+    if (/[.!?|।]$/.test(rawTok) || chunk.length >= 14) {
+      flushChunk();
+    }
+  }
+  flushChunk();
+  return sentences;
+}
+
+/**
+ * Enforces monotonic timestamps on words and sentences, clamping non-monotonic entries
+ * and appending warnings to `warnings`. Also drops zero-length words.
+ */
+function sanitizeAndNormalizeTranscript(
+  rawText: string,
+  sentences: SentenceItem[],
+  words: WordItem[],
+  fallbackDuration: number,
+  estimated: boolean,
+  warnings: string[]
+): TranscriptData {
+  // 1. Filter zero-length words and clamp non-monotonic word times
+  const cleanWords: WordItem[] = [];
+  let prevWordEnd = 0;
+
+  for (const w of words) {
+    const trimmed = w.w.trim();
+    if (!trimmed) continue;
+    let s = round2(Math.max(0, w.s));
+    let e = round2(w.e);
+    if (s < prevWordEnd - 0.01) {
+      warnings.push(
+        `Clamped non-monotonic word "${trimmed}" start time from ${s.toFixed(2)}s to ${prevWordEnd.toFixed(2)}s`
+      );
+      s = prevWordEnd;
+    }
+    if (e <= s) {
+      if (w.e < w.s) {
+        warnings.push(`Clamped inverted word "${trimmed}" end time (${w.e.toFixed(2)}s < ${s.toFixed(2)}s)`);
+      }
+      e = round2(s + 0.12);
+    }
+    prevWordEnd = e;
+    cleanWords.push({
+      i: cleanWords.length,
+      w: trimmed,
+      s,
+      e,
+      estimated: w.estimated ?? estimated,
+    });
+  }
+
+  // 2. Clamp non-monotonic sentence times
+  const cleanSentences: SentenceItem[] = [];
+  let prevSentStart = 0;
+  for (const sent of sentences) {
+    const text = sent.text.trim();
+    if (!text) continue;
+    let s = round2(Math.max(0, sent.s));
+    let e = round2(sent.e);
+    if (s < prevSentStart - 0.01) {
+      warnings.push(`Clamped non-monotonic sentence #${cleanSentences.length} start time to ${prevSentStart.toFixed(2)}s`);
+      s = prevSentStart;
+    }
+    if (e <= s) {
+      e = round2(s + Math.max(0.5, text.length / 14));
+    }
+    prevSentStart = s;
+    cleanSentences.push({
+      i: cleanSentences.length,
+      text,
+      s,
+      e,
+      estimated: sent.estimated ?? estimated,
+    });
+  }
+
+  const maxS = cleanSentences.length > 0 ? cleanSentences[cleanSentences.length - 1].e : 0;
+  const maxW = cleanWords.length > 0 ? cleanWords[cleanWords.length - 1].e : 0;
+  const duration = round2(Math.max(maxS, maxW, fallbackDuration));
+
+  return {
+    rawText,
+    duration,
+    sentences: cleanSentences,
+    words: cleanWords,
+    estimated,
+    warnings,
+  };
+}
+
+/**
+ * Parses a transcript from any of the M10 formats:
+ * 1. SRT and WebVTT (cue-level)
+ * 2. Lines `MM:SS.ss --> MM:SS.ss spoken words` (also `HH:MM:SS.mmm` or `[0.00 - 4.80] ...`)
+ * 3. JSON: array of `{w,s,e}` or `{word,start,end}`, or `{text,start,end}`, or nested `{segments:[{words:[...]}]}`
+ * 4. One word per line: `0.12 Hello` or `Hello 0.12 0.40`
+ * 5. Plain text + total duration: distribute by character count (flagged as `estimated: true`)
  */
 export function parseTranscript(rawInput: string, fallbackDuration = 12): TranscriptData {
   const trimmed = rawInput.trim();
+  const warnings: string[] = [];
+
   if (!trimmed) {
     return {
       rawText: '',
       duration: fallbackDuration,
       sentences: [],
       words: [],
+      estimated: false,
+      warnings: [],
     };
   }
 
@@ -73,20 +207,65 @@ export function parseTranscript(rawInput: string, fallbackDuration = 12): Transc
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
       const parsed = JSON.parse(trimmed);
-      return parseJsonTranscript(parsed, trimmed, fallbackDuration);
+      return parseJsonTranscript(parsed, trimmed, fallbackDuration, warnings);
     } catch {
       // Fall through to text parsers
     }
   }
 
-  // 2. Try SRT / WebVTT format (`-->`)
-  if (trimmed.includes('-->')) {
-    return parseSrtOrVtt(trimmed, fallbackDuration);
+  // 2. Try SRT / WebVTT cue blocks (multi-line blocks with `-->`)
+  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const singleLineArrowRegex =
+    /^\[?(\d+(?::\d+)*(?:[.,]\d+)?)\s*(?:-->|-|to)\s*(\d+(?::\d+)*(?:[.,]\d+)?)\]?\s+(.+)$/i;
+
+  if (trimmed.includes('-->') && !lines.every((l) => singleLineArrowRegex.test(l))) {
+    return parseSrtOrVtt(trimmed, fallbackDuration, warnings);
   }
 
-  // 3. Try line-timestamped format (`[00:00 - 00:03] ...` or `0:00 ...`)
-  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const timeLineRegex = /^\[?(\d+:?\d*(?:[.,]\d+)?)(?:\s*(?:-|-->|to)\s*(\d+:?\d*(?:[.,]\d+)?))?\]?\s+(.+)$/;
+  // 3. Try one-word-per-line format: `Hello 0.12 0.40` or `0.12 Hello`
+  const wordStartEndRegex = /^([^\d\s]\S*)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)$/;
+  const timeThenSingleWordRegex = /^(\d+(?:\.\d+)?)\s+([^\s]+)$/;
+
+  if (lines.length > 0 && lines.every((l) => wordStartEndRegex.test(l))) {
+    const rawTokens: string[] = [];
+    const words: WordItem[] = [];
+    for (const line of lines) {
+      const m = wordStartEndRegex.exec(line)!;
+      const rawTok = m[1].trim();
+      const cleanW = rawTok.replace(/^[.,!?;:"'()[\]]+|[.,!?;:"'()[\]]+$/g, '');
+      const s = parseFloat(m[2]);
+      const e = parseFloat(m[3]);
+      if (cleanW.length > 0) {
+        rawTokens.push(rawTok);
+        words.push({ i: words.length, w: cleanW, s: round2(s), e: round2(e), estimated: false });
+      }
+    }
+    const sentences = buildSentencesFromWords(words, rawTokens);
+    return sanitizeAndNormalizeTranscript(trimmed, sentences, words, fallbackDuration, false, warnings);
+  }
+
+  if (lines.length > 0 && lines.every((l) => timeThenSingleWordRegex.test(l))) {
+    const rawTokens: string[] = [];
+    const words: WordItem[] = [];
+    for (let idx = 0; idx < lines.length; idx++) {
+      const m = timeThenSingleWordRegex.exec(lines[idx])!;
+      const s = parseFloat(m[1]);
+      const nextM = idx + 1 < lines.length ? timeThenSingleWordRegex.exec(lines[idx + 1]) : null;
+      const e = nextM ? Math.max(s + 0.08, parseFloat(nextM[1])) : s + 0.35;
+      const rawTok = m[2].trim();
+      const cleanW = rawTok.replace(/^[.,!?;:"'()[\]]+|[.,!?;:"'()[\]]+$/g, '');
+      if (cleanW.length > 0) {
+        rawTokens.push(rawTok);
+        words.push({ i: words.length, w: cleanW, s: round2(s), e: round2(e), estimated: false });
+      }
+    }
+    const sentences = buildSentencesFromWords(words, rawTokens);
+    return sanitizeAndNormalizeTranscript(trimmed, sentences, words, fallbackDuration, false, warnings);
+  }
+
+  // 4. Try line-timestamped sentence format (`MM:SS.ss --> MM:SS.ss spoken words` or `[0.00 - 4.80] ...`)
+  const timeLineRegex =
+    /^\[?(\d+(?::\d+)*(?:[.,]\d+)?)(?:\s*(?:-->|-|to)\s*(\d+(?::\d+)*(?:[.,]\d+)?))?\]?\s+(.+)$/i;
   if (lines.length > 0 && lines.every((l) => timeLineRegex.test(l))) {
     const sentences: SentenceItem[] = [];
     const words: WordItem[] = [];
@@ -100,22 +279,33 @@ export function parseTranscript(rawInput: string, fallbackDuration = 12): Transc
       }
       const text = m[3].trim();
       if (!e || e <= s) {
-        e = s + Math.max(1.5, text.length / 14);
+        e = s + Math.max(1.2, text.length / 14);
       }
-      sentences.push({ i: idx, text, s: round2(s), e: round2(e) });
-      const spread = spreadWordsAcrossSentence(text, s, e, words.length);
-      words.push(...spread);
+      // Split sub-clauses if sentence break punctuation appears inside the line
+      const subParts = text
+        .split(/(?<=[.!?।|])\s+/)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      const totalChars = Math.max(1, subParts.reduce((a, b) => a + b.length, 0));
+      let curChar = 0;
+      for (const sub of subParts) {
+        const subS = s + (curChar / totalChars) * (e - s);
+        curChar += sub.length;
+        const subE = s + (curChar / totalChars) * (e - s);
+        sentences.push({
+          i: sentences.length,
+          text: sub,
+          s: round2(subS),
+          e: round2(subE),
+          estimated: true,
+        });
+        words.push(...spreadWordsAcrossSentence(sub, subS, subE, words.length, true));
+      }
     }
-    const maxEnd = sentences.length > 0 ? sentences[sentences.length - 1].e : fallbackDuration;
-    return {
-      rawText: trimmed,
-      duration: round2(Math.max(maxEnd, fallbackDuration)),
-      sentences,
-      words,
-    };
+    return sanitizeAndNormalizeTranscript(trimmed, sentences, words, fallbackDuration, true, warnings);
   }
 
-  // 4. Plain text: split into sentences and spread by character count across fallbackDuration
+  // 5. Plain text: split into sentences at . ? ! | and Hindi danda ।, distribute by character count (estimated: true)
   const rawSentences = trimmed
     .split(/(?<=[.!?।|])\s+|\n+/)
     .map((s) => s.trim())
@@ -137,52 +327,50 @@ export function parseTranscript(rawInput: string, fallbackDuration = 12): Transc
       text: sText,
       s: round2(sStart),
       e: round2(sEnd),
+      estimated: true,
     });
-    const spread = spreadWordsAcrossSentence(sText, sStart, sEnd, words.length);
+    const spread = spreadWordsAcrossSentence(sText, sStart, sEnd, words.length, true);
     words.push(...spread);
   });
 
-  return {
-    rawText: trimmed,
-    duration: round2(dur),
-    sentences,
-    words,
-  };
+  warnings.push('Plain text transcript: word and sentence timestamps were estimated by character count (ESTIMATED).');
+  return sanitizeAndNormalizeTranscript(trimmed, sentences, words, dur, true, warnings);
 }
 
-function parseJsonTranscript(parsed: any, rawText: string, fallbackDuration: number): TranscriptData {
+function parseJsonTranscript(
+  parsed: any,
+  rawText: string,
+  fallbackDuration: number,
+  warnings: string[]
+): TranscriptData {
   const sentences: SentenceItem[] = [];
   const words: WordItem[] = [];
+  const rawTokens: string[] = [];
+  let estimated = false;
 
   if (Array.isArray(parsed)) {
-    // Could be an array of words or sentences
     if (parsed.length > 0 && ('w' in parsed[0] || 'word' in parsed[0])) {
-      parsed.forEach((item, idx) => {
-        const w = String(item.w ?? item.word ?? '').trim();
+      parsed.forEach((item) => {
+        const rawW = String(item.w ?? item.word ?? '').trim();
+        const cleanW = rawW.replace(/^[.,!?;:"'()[\]]+|[.,!?;:"'()[\]]+$/g, '');
         const s = round2(Number(item.s ?? item.start ?? 0));
         const e = round2(Number(item.e ?? item.end ?? s + 0.25));
-        if (w.length > 0 && e > s) {
-          words.push({ i: words.length, w, s, e });
+        if (cleanW.length > 0) {
+          rawTokens.push(rawW);
+          words.push({ i: words.length, w: cleanW, s, e, estimated: false });
         }
-        void idx;
       });
-      // Group words into clauses/sentences of ~7 words
-      for (let i = 0; i < words.length; i += 7) {
-        const chunk = words.slice(i, i + 7);
-        sentences.push({
-          i: sentences.length,
-          text: chunk.map((c) => c.w).join(' '),
-          s: chunk[0].s,
-          e: chunk[chunk.length - 1].e,
-        });
-      }
+      sentences.push(...buildSentencesFromWords(words, rawTokens));
     } else {
+      estimated = true;
       parsed.forEach((item, idx) => {
         const text = String(item.text ?? '').trim();
         const s = round2(Number(item.s ?? item.start ?? 0));
         const e = round2(Number(item.e ?? item.end ?? s + 2));
-        sentences.push({ i: idx, text, s, e });
-        words.push(...spreadWordsAcrossSentence(text, s, e, words.length));
+        if (text) {
+          sentences.push({ i: idx, text, s, e, estimated: true });
+          words.push(...spreadWordsAcrossSentence(text, s, e, words.length, true));
+        }
       });
     }
   } else if (parsed && typeof parsed === 'object') {
@@ -191,21 +379,27 @@ function parseJsonTranscript(parsed: any, rawText: string, fallbackDuration: num
         const text = String(item.text ?? '').trim();
         const s = round2(Number(item.s ?? item.start ?? 0));
         const e = round2(Number(item.e ?? item.end ?? s + 2));
-        sentences.push({ i: item.i ?? idx, text, s, e });
+        if (text) {
+          sentences.push({ i: item.i ?? idx, text, s, e });
+        }
       });
     } else if (Array.isArray(parsed.segments)) {
       parsed.segments.forEach((seg: any, idx: number) => {
         const text = String(seg.text ?? '').trim();
         const s = round2(Number(seg.start ?? seg.s ?? 0));
         const e = round2(Number(seg.end ?? seg.e ?? s + 2));
-        sentences.push({ i: idx, text, s, e });
+        if (text) {
+          sentences.push({ i: idx, text, s, e });
+        }
         if (Array.isArray(seg.words)) {
           seg.words.forEach((wObj: any) => {
-            const w = String(wObj.word ?? wObj.w ?? '').trim();
+            const rawW = String(wObj.word ?? wObj.w ?? '').trim();
+            const cleanW = rawW.replace(/^[.,!?;:"'()[\]]+|[.,!?;:"'()[\]]+$/g, '');
             const ws = round2(Number(wObj.start ?? wObj.s ?? s));
             const we = round2(Number(wObj.end ?? wObj.e ?? ws + 0.2));
-            if (w && we > ws) {
-              words.push({ i: words.length, w, s: ws, e: we });
+            if (cleanW) {
+              rawTokens.push(rawW);
+              words.push({ i: words.length, w: cleanW, s: ws, e: we, estimated: false });
             }
           });
         }
@@ -214,41 +408,34 @@ function parseJsonTranscript(parsed: any, rawText: string, fallbackDuration: num
 
     if (Array.isArray(parsed.words) && words.length === 0) {
       parsed.words.forEach((wObj: any, idx: number) => {
-        const w = String(wObj.w ?? wObj.word ?? '').trim();
+        const rawW = String(wObj.w ?? wObj.word ?? '').trim();
+        const cleanW = rawW.replace(/^[.,!?;:"'()[\]]+|[.,!?;:"'()[\]]+$/g, '');
         const s = round2(Number(wObj.s ?? wObj.start ?? 0));
         const e = round2(Number(wObj.e ?? wObj.end ?? s + 0.2));
-        if (w && e > s) {
-          words.push({ i: wObj.i ?? idx, w, s, e });
+        if (cleanW) {
+          rawTokens.push(rawW);
+          words.push({ i: wObj.i ?? idx, w: cleanW, s, e, estimated: false });
         }
       });
     }
 
     if (words.length === 0 && sentences.length > 0) {
+      estimated = true;
       for (const sent of sentences) {
-        words.push(...spreadWordsAcrossSentence(sent.text, sent.s, sent.e, words.length));
+        sent.estimated = true;
+        words.push(...spreadWordsAcrossSentence(sent.text, sent.s, sent.e, words.length, true));
       }
     }
     if (sentences.length === 0 && words.length > 0) {
-      for (let i = 0; i < words.length; i += 7) {
-        const chunk = words.slice(i, i + 7);
-        sentences.push({
-          i: sentences.length,
-          text: chunk.map((c) => c.w).join(' '),
-          s: chunk[0].s,
-          e: chunk[chunk.length - 1].e,
-        });
-      }
+      sentences.push(...buildSentencesFromWords(words, rawTokens));
     }
   }
 
-  const maxS = sentences.length > 0 ? sentences[sentences.length - 1].e : 0;
-  const maxW = words.length > 0 ? words[words.length - 1].e : 0;
-  const duration = round2(Number(parsed?.duration) || Math.max(maxS, maxW, fallbackDuration));
-
-  return { rawText, duration, sentences, words };
+  const dur = Number(parsed?.duration) || fallbackDuration;
+  return sanitizeAndNormalizeTranscript(rawText, sentences, words, dur, estimated, warnings);
 }
 
-function parseSrtOrVtt(raw: string, fallbackDuration: number): TranscriptData {
+function parseSrtOrVtt(raw: string, fallbackDuration: number, warnings: string[]): TranscriptData {
   const blocks = raw
     .replace(/^WEBVTT[^\n]*\n+/i, '')
     .trim()
@@ -271,22 +458,18 @@ function parseSrtOrVtt(raw: string, fallbackDuration: number): TranscriptData {
       .trim();
     if (!text) continue;
 
+    const cueEnd = Math.max(s + 0.2, e);
     sentences.push({
       i: sentences.length,
       text,
       s: round2(s),
-      e: round2(Math.max(s + 0.2, e)),
+      e: round2(cueEnd),
+      estimated: true,
     });
-    words.push(...spreadWordsAcrossSentence(text, s, Math.max(s + 0.2, e), words.length));
+    words.push(...spreadWordsAcrossSentence(text, s, cueEnd, words.length, true));
   }
 
-  const maxEnd = sentences.length > 0 ? sentences[sentences.length - 1].e : fallbackDuration;
-  return {
-    rawText: raw,
-    duration: round2(Math.max(maxEnd, fallbackDuration)),
-    sentences,
-    words,
-  };
+  return sanitizeAndNormalizeTranscript(raw, sentences, words, fallbackDuration, true, warnings);
 }
 
 export const DEMO_HINGLISH_TRANSCRIPT = `[0.00 - 4.80] Yeh sequence hota hai app banane ka: sabse pehle app banao, test karo aur improve karo,

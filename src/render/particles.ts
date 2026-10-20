@@ -12,8 +12,10 @@ function pickRange(val: [number, number] | number | undefined, rand: number, def
 }
 
 /**
- * Pure, stateless particle evaluator at relative time `tRel` from `layer.numericSeed`.
- * Supports burst and continuous emitters with analytic kinematics `p(t) = p0 + v*t + 0.5*g*t^2`.
+ * Pure, stateless particle evaluator at relative time `tRel`:
+ * Per-particle state is a pure function of `(seed, index, age)`.
+ * Supports both `burst` and continuous `rate` emitters, gravity, size/opacity over life,
+ * spin, and additive blend (`em.blend === "add"`).
  */
 export function drawParticlesLayer(
   ctx: Any2DContext,
@@ -25,15 +27,22 @@ export function drawParticlesLayer(
 ): void {
   if (tRel < 0) return;
   const em = layer.emitter || {};
-  const count = Math.min(180, Math.max(1, em.count ?? 36));
-  const isBurst = layer.burst !== false;
+  const isRateEmitter = typeof em.rate === 'number' && em.rate > 0;
+  const isBurst = !isRateEmitter && layer.burst !== false;
+  const count = isRateEmitter
+    ? Math.min(200, Math.max(1, Math.ceil(em.rate! * 2.5)))
+    : Math.min(180, Math.max(1, em.count ?? 36));
   const gravity = em.gravity ?? 240;
   const rawColors = Array.isArray(em.colors) && em.colors.length > 0 ? em.colors : ['@acc', '@ink', '@second'];
-  const colors = rawColors.map((c) => resolveColorToken(c, tokens));
+  const colors = rawColors.map((c: string) => resolveColorToken(c, tokens));
   const shape = em.shape || 'circle';
   const prng = mulberry32(layer.numericSeed);
 
   ctx.save();
+  if (em.blend === 'add' || layer.blend === 'add') {
+    ctx.globalCompositeOperation = 'lighter';
+  }
+
   for (let i = 0; i < count; i++) {
     const rLife = prng();
     const rSpeed = prng();
@@ -50,7 +59,16 @@ export function drawParticlesLayer(
     const sizeEnd = em.sizeEnd ?? sizeStart * 0.25;
     const opEnd = em.opacityEnd ?? 0;
 
-    const pAge = isBurst ? tRel : (tRel + rOffset * life) % life;
+    let pAge: number;
+    if (isBurst) {
+      pAge = tRel;
+    } else if (isRateEmitter) {
+      const spawnTime = i / em.rate!;
+      if (tRel < spawnTime) continue;
+      pAge = (tRel - spawnTime) % life;
+    } else {
+      pAge = (tRel + rOffset * life) % life;
+    }
     if (pAge < 0 || pAge > life) continue;
 
     const progress = clamp(pAge / life, 0, 1);

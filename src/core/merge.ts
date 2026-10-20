@@ -16,7 +16,10 @@ import type {
  * - Resolves `carry.persist` layers (`"until": "open"`) across boundaries
  * - Applies `patch` entries (`{"patch":"hdr","motion":[...],"t":[null,"endTime"]}`) directly to persisted layers
  */
-export function mergeRecipeParts(parts: RecipeDocument[]): RecipeDocument {
+export function mergeRecipeParts(
+  parts: RecipeDocument[],
+  totalDurationOverride?: number
+): RecipeDocument {
   if (parts.length === 0) {
     throw new Error('Cannot merge an empty list of recipe parts');
   }
@@ -134,6 +137,7 @@ export function mergeRecipeParts(parts: RecipeDocument[]): RecipeDocument {
 
   const lastPart = parts[parts.length - 1];
   const totalDuration =
+    totalDurationOverride ??
     first.meta?.duration ??
     lastPart.meta?.part?.to ??
     (mergedScenes.length > 0 ? Number(mergedScenes[mergedScenes.length - 1].t[1]) : 10);
@@ -161,4 +165,29 @@ export function mergeRecipeParts(parts: RecipeDocument[]): RecipeDocument {
     camera: mergedCamera,
     scenes: mergedScenes,
   };
+}
+
+/**
+ * M11 Part Metadata Check:
+ * Verifies that a pasted RecipeDocument's `meta.part` matches the expected slot (`n, of, from, to`).
+ * Returns a descriptive error string if mismatched, or `null` if valid.
+ */
+export function validatePartMetaMatch(
+  doc: RecipeDocument,
+  expected: { n: number; of: number; from: number; to: number }
+): string | null {
+  const actual = doc.meta?.part;
+  if (!actual) {
+    if (expected.of > 1) {
+      return `Missing meta.part: expected part ${expected.n} of ${expected.of} (${expected.from}s-${expected.to}s)`;
+    }
+    return null;
+  }
+  if (actual.n !== expected.n) {
+    return `Part number mismatch: pasted part is ${actual.n}, expected part ${expected.n} of ${expected.of}`;
+  }
+  if (Math.abs(actual.from - expected.from) > 1.5 || Math.abs(actual.to - expected.to) > 1.5) {
+    return `Part time range mismatch: pasted [${actual.from}s, ${actual.to}s], expected [${expected.from}s, ${expected.to}s]`;
+  }
+  return null;
 }

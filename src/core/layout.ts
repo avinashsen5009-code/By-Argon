@@ -63,7 +63,7 @@ export function getAnchorOffsetFactors(anchor: AnchorType | undefined): [number,
 
 /**
  * Auto-positions children inside a group according to `group.layout` (row | column | grid)
- * per SPEC Section 5.
+ * per SPEC Section 5 (supports `gap`, `cols`, `align`).
  */
 export function applyGroupLayout(
   children: Layer[],
@@ -73,12 +73,20 @@ export function applyGroupLayout(
 ): Layer[] {
   if (!layout || children.length === 0) return children;
   const gap = layout.gap ?? 24;
+  const align = layout.align ?? 'center';
   const n = children.length;
 
   if (layout.type === 'row') {
-    const widths = children.map((c) => (typeof c.w === 'number' ? c.w : Math.min(260, (groupW - gap * (n - 1)) / n)));
+    const widths = children.map((c) =>
+      typeof c.w === 'number' ? c.w : Math.min(260, (groupW - gap * (n - 1)) / n)
+    );
     const totalW = widths.reduce((a, b) => a + b, 0) + gap * (n - 1);
-    let curX = (groupW - totalW) * 0.5;
+    let curX =
+      align === 'start'
+        ? 0
+        : align === 'end'
+        ? Math.max(0, groupW - totalW)
+        : (groupW - totalW) * 0.5;
     return children.map((child, idx) => {
       const cw = widths[idx];
       const cx = (curX + cw * 0.5) / Math.max(1, groupW);
@@ -86,23 +94,32 @@ export function applyGroupLayout(
       return {
         ...child,
         x: child.x ?? cx,
-        y: child.y ?? 0.5,
+        y: child.y ?? (align === 'start' ? 0.25 : align === 'end' ? 0.75 : 0.5),
+        h: align === 'stretch' && child.h === undefined ? groupH : child.h,
       };
     });
   }
 
   if (layout.type === 'column') {
-    const heights = children.map((c) => (typeof c.h === 'number' ? c.h : Math.min(110, (groupH - gap * (n - 1)) / n)));
+    const heights = children.map((c) =>
+      typeof c.h === 'number' ? c.h : Math.min(110, (groupH - gap * (n - 1)) / n)
+    );
     const totalH = heights.reduce((a, b) => a + b, 0) + gap * (n - 1);
-    let curY = (groupH - totalH) * 0.5;
+    let curY =
+      align === 'start'
+        ? 0
+        : align === 'end'
+        ? Math.max(0, groupH - totalH)
+        : (groupH - totalH) * 0.5;
     return children.map((child, idx) => {
       const ch = heights[idx];
       const cy = (curY + ch * 0.5) / Math.max(1, groupH);
       curY += ch + gap;
       return {
         ...child,
-        x: child.x ?? 0.5,
+        x: child.x ?? (align === 'start' ? 0.25 : align === 'end' ? 0.75 : 0.5),
         y: child.y ?? cy,
+        w: align === 'stretch' && child.w === undefined ? groupW : child.w,
       };
     });
   }
@@ -126,6 +143,95 @@ export function applyGroupLayout(
   }
 
   return children;
+}
+
+/**
+ * Expands all `use` components (built-in and user `defs`) into plain layers across the entire
+ * RecipeDocument for the "Flatten recipe" action in the editor.
+ */
+export function flattenRecipeDocument(
+  doc: RecipeDocument,
+  transcript?: TranscriptData
+): RecipeDocument {
+  const w = doc.meta?.w ?? 1920;
+  const h = doc.meta?.h ?? 1080;
+  const partFrom = doc.meta?.part?.from ?? 0;
+  const partTo = doc.meta?.part?.to ?? doc.meta?.duration ?? 10;
+  const tokens = expandThemeTokens(doc.theme);
+
+  function flattenList(
+    entries: (Layer | LayerPatch)[],
+    sT0: number,
+    sT1: number,
+    refW: number,
+    refH: number
+  ): (Layer | LayerPatch)[] {
+    const out: (Layer | LayerPatch)[] = [];
+    for (const entry of entries) {
+      if (isPatch(entry)) {
+        out.push(entry);
+        continue;
+      }
+      const rawT0 =
+        entry.t?.[0] !== undefined
+          ? resolveTimeValue(entry.t[0], transcript, sT0).seconds
+          : sT0;
+      const rawT1 =
+        entry.t?.[1] !== undefined
+          ? resolveTimeValue(entry.t[1], transcript, sT1).seconds
+          : sT1;
+
+      if (entry.type === 'use') {
+        const resolvedArgs: Record<string, any> = { ...(entry.args || {}) };
+        if (resolvedArgs.at !== undefined) {
+          resolvedArgs.at = resolveTimeValue(resolvedArgs.at, transcript, rawT0).seconds;
+        } else {
+          resolvedArgs.at = rawT0;
+        }
+        if (resolvedArgs.pressAt !== undefined) {
+          resolvedArgs.pressAt = resolveTimeValue(resolvedArgs.pressAt, transcript, rawT0 + 0.5).seconds;
+        }
+        if (Array.isArray(resolvedArgs.messages)) {
+          resolvedArgs.messages = resolvedArgs.messages.map((m: any, mIdx: number) => ({
+            ...m,
+            at: resolveTimeValue(m.at, transcript, resolvedArgs.at + 0.25 + mIdx * 0.45).seconds,
+          }));
+        }
+        const expanded = expandUseLayer(
+          { ...entry, args: resolvedArgs, t: [rawT0, rawT1] },
+          [rawT0, rawT1],
+          doc.defs,
+          tokens,
+          refW,
+          refH
+        );
+        out.push(...flattenList(expanded, rawT0, rawT1, refW, refH));
+      } else if (entry.type === 'group' && Array.isArray(entry.children)) {
+        const gw = resolveSizePx(entry.w, refW, refW * 0.5);
+        const gh = resolveSizePx(entry.h, refH, refH * 0.5);
+        out.push({
+          ...entry,
+          children: flattenList(entry.children, rawT0, rawT1, gw, gh) as Layer[],
+        });
+      } else {
+        out.push(entry);
+      }
+    }
+    return out;
+  }
+
+  return {
+    ...doc,
+    defs: undefined,
+    scenes: (doc.scenes || []).map((sc) => {
+      const sT0 = resolveTimeValue(sc.t?.[0], transcript, partFrom).seconds;
+      const sT1 = resolveTimeValue(sc.t?.[1], transcript, partTo).seconds;
+      return {
+        ...sc,
+        layers: flattenList(sc.layers || [], sT0, sT1, w, h),
+      };
+    }),
+  };
 }
 
 function isPatch(entry: Layer | LayerPatch): entry is LayerPatch {

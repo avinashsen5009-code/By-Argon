@@ -31,10 +31,23 @@ import { drawImageOrVideoLayer } from './sprites.ts';
 import { drawCaptionsLayer, drawHighlightLayer, drawTextLayer } from './text.ts';
 import { applySceneTransitionTransform, drawTransitionOverlays } from './transitions.ts';
 
+import { ICON_NAMES, LAYER_TYPES, SHAPE_KINDS } from '../core/vocab.ts';
+
 export interface RenderFrameOptions {
   showSafeArea?: boolean;
   showLayoutGrid?: boolean;
+  showLayerBounds?: boolean;
+  selectedLayerId?: string | null;
   fastPreview?: boolean;
+  lenientPreview?: boolean;
+  skipUnknownOnExport?: boolean;
+  transparentBackground?: boolean;
+}
+
+export interface RenderFrameMetrics {
+  totalMs: number;
+  heaviestLayers: Array<{ id: string; type: string; ms: number }>;
+  skippedUnknownLayers: string[];
 }
 
 interface EvaluatedLayerTransform {
@@ -237,16 +250,32 @@ function evaluateLayerAtTime(
   };
 }
 
+function isLayerUnknownVocab(layer: CompiledLayer): string | null {
+  if (!LAYER_TYPES.includes(layer.type)) return `unknown type "${layer.type}"`;
+  if (layer.type === 'shape' && layer.kind && !SHAPE_KINDS.includes(layer.kind)) {
+    return `unknown shape "${layer.kind}"`;
+  }
+  if (layer.type === 'icon' && layer.name && !ICON_NAMES.includes(layer.name)) {
+    return `unknown icon "${layer.name}"`;
+  }
+  return null;
+}
+
 /**
  * Pure, deterministic frame renderer for RECIPE v3.1.
  * Same CompiledRecipe + same timestamp `t` -> identical pixels.
+ * Returns frame timing metrics and heaviest layers for the M13 frame-time meter.
  */
 export function renderFrame(
   ctx: Any2DContext,
   compiled: CompiledRecipe,
   t: number,
   options: RenderFrameOptions = {}
-): void {
+): RenderFrameMetrics {
+  const frameStartMs = typeof performance !== 'undefined' ? performance.now() : 0;
+  const layerTimings: Array<{ id: string; type: string; ms: number }> = [];
+  const skippedUnknownLayers: string[] = [];
+
   const W = compiled.w;
   const H = compiled.h;
   const clampedT = clamp(t, 0, compiled.duration);
@@ -255,8 +284,10 @@ export function renderFrame(
   ctx.save();
   ctx.clearRect(0, 0, W, H);
 
-  // 1. Base scene background
-  drawBaseSceneBackground(ctx, compiled.tokens, W, H);
+  // 1. Base scene background (skipped when exporting transparent WebM overlay)
+  if (!options.transparentBackground) {
+    drawBaseSceneBackground(ctx, compiled.tokens, W, H);
+  }
 
   // 2. Find active scene for transition transform
   const activeScene = compiled.scenes.find((s) => clampedT >= s.t0 && clampedT <= s.t1);
@@ -281,12 +312,15 @@ export function renderFrame(
   };
 
   for (const layer of activeLayers) {
+    const lStartMs = typeof performance !== 'undefined' ? performance.now() : 0;
     if (layer.type === 'group') continue; // Group container transforms are applied to its children
 
     if (layer.type === 'background') {
-      const ev = getEvaluated(layer);
-      if (ev.opacity > 0.01) {
-        drawBackgroundLayer(ctx, layer, clampedT, compiled.tokens, W, H, ev.opacity);
+      if (!options.transparentBackground) {
+        const ev = getEvaluated(layer);
+        if (ev.opacity > 0.01) {
+          drawBackgroundLayer(ctx, layer, clampedT, compiled.tokens, W, H, ev.opacity);
+        }
       }
       continue;
     }
@@ -325,22 +359,38 @@ export function renderFrame(
       }
     }
 
-    // Parent transform inheritance (inherits parent's animated offset, scale about parent's rest center, rotation, opacity)
+    // Parent transform inheritance (inherits parent's animated motion deltas only per SPEC 5)
     if (layer.parent) {
-      const parentLayer = compiled.layersById.get(layer.parent);
-      if (parentLayer) {
+      const ancestors: CompiledLayer[] = [];
+      let curParentId: string | undefined = layer.parent;
+      const seen = new Set<string>();
+      while (curParentId && !seen.has(curParentId)) {
+        seen.add(curParentId);
+        const pLayer = compiled.layersById.get(curParentId);
+        if (!pLayer) break;
+        ancestors.unshift(pLayer);
+        curParentId = pLayer.parent;
+      }
+
+      for (const parentLayer of ancestors) {
         const pEv = getEvaluated(parentLayer);
         const pRefW = parentLayer.groupBox ? parentLayer.groupBox.w : W;
         const pRefH = parentLayer.groupBox ? parentLayer.groupBox.h : H;
         const pRestX = (typeof parentLayer.x === 'number' ? parentLayer.x : 0.5) * pRefW;
         const pRestY = (typeof parentLayer.y === 'number' ? parentLayer.y : 0.5) * pRefH;
+        const pRestScale = typeof parentLayer.scale === 'number' && parentLayer.scale !== 0 ? parentLayer.scale : 1;
+        const pRestRot = typeof parentLayer.rot === 'number' ? parentLayer.rot : 0;
+
+        const dRot = pEv.rotDeg - pRestRot;
+        const dScaleX = pEv.scaleX / pRestScale;
+        const dScaleY = pEv.scaleY / pRestScale;
 
         inheritedOpacity *= pEv.opacity;
         ctx.translate(pEv.xPx, pEv.yPx);
-        if (Math.abs(pEv.rotDeg) > 1e-4) {
-          ctx.rotate((pEv.rotDeg * Math.PI) / 180);
+        if (Math.abs(dRot) > 1e-4) {
+          ctx.rotate((dRot * Math.PI) / 180);
         }
-        ctx.scale(pEv.scaleX, pEv.scaleY);
+        ctx.scale(dScaleX, dScaleY);
         ctx.translate(-pRestX, -pRestY);
       }
     }
@@ -386,6 +436,29 @@ export function renderFrame(
     const dur = Math.max(1e-4, layer.t1 - layer.t0);
     const p = clamp(tRel / dur, 0, 1);
 
+    // M12 Lenient preview check: if layer has an unknown vocabulary name, skip or draw marker
+    const unknownReason = isLayerUnknownVocab(layer);
+    if (unknownReason) {
+      skippedUnknownLayers.push(layer.id);
+      if (!options.skipUnknownOnExport) {
+        ctx.save();
+        ctx.setLineDash([8, 6]);
+        ctx.strokeStyle = '#FF4D6D';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(-ev.wPx * 0.5, -ev.hPx * 0.5, ev.wPx, ev.hPx);
+        ctx.fillStyle = 'rgba(255, 77, 109, 0.18)';
+        ctx.fillRect(-ev.wPx * 0.5, -ev.hPx * 0.5, ev.wPx, ev.hPx);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '700 20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`SKIPPED [${layer.id}]: ${unknownReason}`, 0, 0);
+        ctx.restore();
+      }
+      ctx.restore();
+      continue;
+    }
+
     applyPreDrawLayerFx(
       ctx,
       layer,
@@ -394,7 +467,9 @@ export function renderFrame(
       ev.blurPx,
       tRel,
       compiled.tokens,
-      fastMode
+      fastMode,
+      ev.wPx,
+      ev.hPx
     );
 
     const layerWithColor = ev.colorOverride ? { ...layer, color: ev.colorOverride } : layer;
@@ -477,7 +552,30 @@ export function renderFrame(
       }
     }
 
+    // M11 / M13 Layer-Bounds Overlay or Selected Layer Highlight
+    if (options.showLayerBounds || (options.selectedLayerId && options.selectedLayerId === layer.id)) {
+      const isSelected = options.selectedLayerId === layer.id;
+      ctx.save();
+      ctx.strokeStyle = isSelected ? '#38BDF8' : 'rgba(250, 204, 21, 0.55)';
+      ctx.lineWidth = isSelected ? 4 : 2;
+      if (!isSelected) ctx.setLineDash([6, 4]);
+      ctx.strokeRect(-ev.wPx * 0.5, -ev.hPx * 0.5, ev.wPx, ev.hPx);
+      if (isSelected) {
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.92)';
+        ctx.fillRect(-ev.wPx * 0.5, -ev.hPx * 0.5 - 28, Math.min(ev.wPx, 220), 26);
+        ctx.fillStyle = '#07090E';
+        ctx.font = '700 15px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(` ${layer.id} (${layer.type})`, -ev.wPx * 0.5 + 4, -ev.hPx * 0.5 - 15);
+      }
+      ctx.restore();
+    }
+
     ctx.restore();
+
+    const lEndMs = typeof performance !== 'undefined' ? performance.now() : 0;
+    layerTimings.push({ id: layer.id, type: layer.type, ms: lEndMs - lStartMs });
   }
 
   ctx.restore(); // end scene transition transform
@@ -486,7 +584,9 @@ export function renderFrame(
   drawTransitionOverlays(ctx, transitionOverlays, compiled.tokens, W, H);
 
   // 6. Global vignette & FX
-  drawGlobalFx(ctx, compiled.global, W, H);
+  if (!options.transparentBackground) {
+    drawGlobalFx(ctx, compiled.global, W, H, clampedT);
+  }
 
   // 7. Optional Safe-Area & Layout Grid guides for preview inspection
   if (options.showLayoutGrid) {
@@ -497,6 +597,59 @@ export function renderFrame(
   }
 
   ctx.restore();
+
+  const totalMs = typeof performance !== 'undefined' ? performance.now() - frameStartMs : 0;
+  layerTimings.sort((a, b) => b.ms - a.ms);
+  return {
+    totalMs,
+    heaviestLayers: layerTimings.slice(0, 4),
+    skippedUnknownLayers,
+  };
+}
+
+/**
+ * M11 Tap-to-Select Layer in Preview:
+ * Given normalized canvas coordinates `normX, normY` (0..1) and timestamp `t`,
+ * returns the topmost visible layer at that point.
+ */
+export function hitTestLayerAtPoint(
+  compiled: CompiledRecipe,
+  t: number,
+  normX: number,
+  normY: number
+): CompiledLayer | null {
+  const W = compiled.w;
+  const H = compiled.h;
+  const clampedT = clamp(t, 0, compiled.duration);
+  const px = normX * W;
+  const py = normY * H;
+
+  const activeLayers = queryActiveLayersAtTime(compiled.intervalSorted, clampedT, compiled.duration);
+  // Traverse in reverse order (topmost z-index first)
+  for (let i = activeLayers.length - 1; i >= 0; i--) {
+    const layer = activeLayers[i];
+    if (layer.type === 'background' || layer.type === 'group') continue;
+    const ev = evaluateLayerAtTime(layer, clampedT, W, H, compiled.tokens);
+    if (ev.opacity <= 0.02) continue;
+
+    let centerX = ev.xPx;
+    let centerY = ev.yPx;
+    if (layer.groupId) {
+      const grp = compiled.layersById.get(layer.groupId);
+      if (grp) {
+        const gEv = evaluateLayerAtTime(grp, clampedT, W, H, compiled.tokens);
+        centerX = gEv.xPx - gEv.wPx * 0.5 + ev.xPx;
+        centerY = gEv.yPx - gEv.hPx * 0.5 + ev.yPx;
+      }
+    }
+
+    const hw = Math.max(24, ev.wPx * Math.abs(ev.scaleX) * 0.5);
+    const hh = Math.max(24, ev.hPx * Math.abs(ev.scaleY) * 0.5);
+    if (px >= centerX - hw && px <= centerX + hw && py >= centerY - hh && py <= centerY + hh) {
+      return layer;
+    }
+  }
+  return null;
 }
 
 function drawSafeAreaOverlay(ctx: Any2DContext, w: number, h: number): void {

@@ -2,6 +2,82 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function () {
+        function isExtensionNoise(msg, stackOrFile) {
+          var s = String(msg || '') + ' ' + String(stackOrFile || '');
+          return (
+            s.indexOf('chrome-extension://') !== -1 ||
+            s.indexOf('moz-extension://') !== -1 ||
+            s.indexOf('safari-extension://') !== -1 ||
+            s.indexOf('chrome: call method') !== -1 ||
+            s.indexOf('bekkpoinfafbjglppgdobfdeckghdhlo') !== -1
+          );
+        }
+
+        window.addEventListener(
+          'error',
+          function (event) {
+            if (
+              isExtensionNoise(
+                event && (event.message || (event.error && event.error.message)),
+                (event && event.filename) || (event && event.error && event.error.stack)
+              )
+            ) {
+              event.stopImmediatePropagation();
+              event.preventDefault();
+              return false;
+            }
+          },
+          true
+        );
+
+        window.addEventListener(
+          'unhandledrejection',
+          function (event) {
+            var reason = event && event.reason;
+            var msg = reason && (reason.message || String(reason));
+            var stack = reason && reason.stack;
+            if (isExtensionNoise(msg, stack)) {
+              event.stopImmediatePropagation();
+              event.preventDefault();
+              return false;
+            }
+          },
+          true
+        );
+
+        var origAddEventListener = window.addEventListener.bind(window);
+        window.addEventListener = function (type, listener, options) {
+          if ((type === 'error' || type === 'unhandledrejection') && typeof listener === 'function') {
+            var wrapped = function (event) {
+              var reason = event && (event.reason || event.error);
+              var msg = (event && event.message) || (reason && (reason.message || String(reason)));
+              var stack = (event && event.filename) || (reason && reason.stack);
+              if (isExtensionNoise(msg, stack)) {
+                return;
+              }
+              return listener.apply(this, arguments);
+            };
+            return origAddEventListener(type, wrapped, options);
+          }
+          return origAddEventListener(type, listener, options);
+        };
+
+        var origConsoleError = console.error.bind(console);
+        console.error = function () {
+          for (var i = 0; i < arguments.length; i++) {
+            var arg = arguments[i];
+            var msg = arg && (arg.message || String(arg));
+            var stack = arg && arg.stack;
+            if (isExtensionNoise(msg, stack)) {
+              return;
+            }
+          }
+          return origConsoleError.apply(console, arguments);
+        };
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Recipe Studio</title>
     <meta name="description" content="Deterministic offline RECIPE v3.1 motion-graphics engine, prompt pack builder, validator, and WebCodecs MP4 video exporter." />
@@ -15,4 +91,3 @@
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

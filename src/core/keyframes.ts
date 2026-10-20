@@ -66,37 +66,49 @@ export function registerBuiltInPresets(): void {
 
 registerBuiltInPresets();
 
+function parseSingleCompactToken(tok: string): KeyframeItem | null {
+  const atIdx = tok.indexOf('@');
+  if (atIdx === -1) return null;
+  const rawVal = tok.slice(0, atIdx);
+  const rest = tok.slice(atIdx + 1);
+  const colonIdx = rest.indexOf(':');
+  const timeStr = colonIdx === -1 ? rest : rest.slice(0, colonIdx);
+  const easeStr = colonIdx === -1 ? 'outCubic' : rest.slice(colonIdx + 1);
+  const t = parseFloat(timeStr);
+  if (!Number.isFinite(t)) return null;
+  const numVal = Number(rawVal);
+  const v = !Number.isNaN(numVal) && rawVal.trim() !== '' ? numVal : rawVal;
+  return { t, v, e: easeStr || 'outCubic' };
+}
+
 /**
  * Parses compact string keyframes ("0.5@0 1.12@0.19:outBack 1@0.3") or array keyframes
- * into sorted KeyframeItem[].
+ * (either `{t, v, e}` objects or compact strings) into sorted KeyframeItem[].
  */
-export function parseKeyframeTrack(track: AnimTrackValue): KeyframeItem[] {
+export function parseKeyframeTrack(track: AnimTrackValue | string[]): KeyframeItem[] {
   if (Array.isArray(track)) {
-    return track
-      .map((k) => ({
-        t: Number(k.t) || 0,
-        v: k.v,
-        e: k.e || 'linear',
-      }))
-      .sort((a, b) => a.t - b.t);
+    const items: KeyframeItem[] = [];
+    for (const k of track) {
+      if (typeof k === 'string') {
+        const parsed = parseSingleCompactToken(k.trim());
+        if (parsed) items.push(parsed);
+      } else if (k && typeof k === 'object') {
+        items.push({
+          t: Number(k.t) || 0,
+          v: k.v,
+          e: k.e || 'linear',
+        });
+      }
+    }
+    return items.sort((a, b) => a.t - b.t);
   }
   if (typeof track !== 'string') return [];
 
   const tokens = track.trim().split(/\s+/).filter(Boolean);
   const items: KeyframeItem[] = [];
   for (const tok of tokens) {
-    const atIdx = tok.indexOf('@');
-    if (atIdx === -1) continue;
-    const rawVal = tok.slice(0, atIdx);
-    const rest = tok.slice(atIdx + 1);
-    const colonIdx = rest.indexOf(':');
-    const timeStr = colonIdx === -1 ? rest : rest.slice(0, colonIdx);
-    const easeStr = colonIdx === -1 ? 'outCubic' : rest.slice(colonIdx + 1);
-    const t = parseFloat(timeStr);
-    if (!Number.isFinite(t)) continue;
-    const numVal = Number(rawVal);
-    const v = !Number.isNaN(numVal) && rawVal.trim() !== '' ? numVal : rawVal;
-    items.push({ t, v, e: easeStr || 'outCubic' });
+    const parsed = parseSingleCompactToken(tok);
+    if (parsed) items.push(parsed);
   }
   return items.sort((a, b) => a.t - b.t);
 }
