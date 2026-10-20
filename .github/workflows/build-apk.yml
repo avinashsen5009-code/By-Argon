@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   workflow_dispatch:
 
 jobs:
@@ -17,7 +17,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -29,8 +28,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       # The action's default package list is "tools platform-tools".
-      # 'tools' no longer exists, so we override the list with packages
-      # that do exist. (An empty string falls back to the default.)
+      # 'tools' no longer exists, so override with packages that do.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -49,11 +47,78 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
+      # npm ci fails if package-lock.json is out of sync with package.json.
+      # Try it first (fast, reproducible); fall back to npm install.
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci --no-audit --no-fund || {
+            echo "npm ci failed (lock file out of sync), falling back to npm install"
+            npm install --no-audit --no-fund
+          }
+
+      - name: Ensure Capacitor is installed
+        run: |
+          for pkg in @capacitor/core @capacitor/cli @capacitor/android; do
+            if [ ! -d "node_modules/$pkg" ]; then
+              echo "Missing $pkg, installing"
+              npm install --no-audit --no-fund "$pkg"
+            fi
+          done
+          npx cap --version
+
+      # Capacitor 7+ needs JDK 21; older versions work with 17.
+      - name: Detect Capacitor version
+        id: cap
+        run: |
+          MAJOR=$(node -p "require('./node_modules/@capacitor/android/package.json').version.split('.')[0]")
+          echo "Capacitor Android major version: $MAJOR"
+          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java 21 (Capacitor 7+)
+        if: steps.cap.outputs.major >= 7
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
 
       - name: Build web assets
-        run: npm run build
+        run: npm run build --if-present
+
+      # Finds the web output folder, creates capacitor config and the
+      # android project only if they are missing.
+      - name: Prepare Capacitor project
+        run: |
+          WEBDIR=""
+          for d in dist build www public out; do
+            if [ -f "$d/index.html" ]; then WEBDIR="$d"; break; fi
+          done
+          if [ -z "$WEBDIR" ] && [ -f index.html ]; then
+            echo "No build folder found, packaging root index.html into www/"
+            mkdir -p www
+            cp index.html www/
+            for item in assets css js img images fonts icons static; do
+              [ -e "$item" ] && cp -r "$item" www/ || true
+            done
+            WEBDIR="www"
+          fi
+          echo "Web dir: ${WEBDIR:-<none>}"
+
+          if ! ls capacitor.config.* > /dev/null 2>&1; then
+            [ -n "$WEBDIR" ] || { echo "::error::No web build output found (no index.html)"; exit 1; }
+            echo "No capacitor config found, creating one"
+            cat > capacitor.config.json <<JSON
+          {
+            "appId": "com.argon.app",
+            "appName": "By-Argon",
+            "webDir": "$WEBDIR"
+          }
+          JSON
+          fi
+
+          if [ ! -d android ]; then
+            echo "No android folder, adding platform"
+            npx cap add android
+          fi
 
       - name: Sync Capacitor Android project
         run: npx cap sync android
