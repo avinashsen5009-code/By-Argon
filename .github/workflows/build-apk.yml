@@ -26,6 +26,8 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-disabled: true
 
       # The action's default package list is "tools platform-tools".
       # 'tools' no longer exists, so override with packages that do.
@@ -65,8 +67,6 @@ jobs:
             fi
           done
           # The Capacitor CLI needs TypeScript 5.x to read capacitor.config.ts.
-          # Newer/missing versions cause "Cannot read properties of
-          # undefined (reading 'CommonJS')". --no-save keeps package.json clean.
           npm install --no-save --no-audit --no-fund typescript@5
           npx cap --version
 
@@ -127,27 +127,54 @@ jobs:
       - name: Sync Capacitor Android project
         run: npx cap sync android
 
+      - name: Show Android project layout
+        run: |
+          echo "--- android/ top level ---"
+          ls -la android
+          echo "--- settings.gradle ---"
+          cat android/settings.gradle* 2>/dev/null || true
+          echo "--- variables.gradle ---"
+          cat android/variables.gradle 2>/dev/null || true
+
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
+      # Builds the app module explicitly and falls back to the generic task.
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --stacktrace
-
-      - name: Locate APK
         run: |
-          echo "APK files found:"
-          find android -name "*.apk" -type f -print
-          echo "Build outputs tree:"
-          find android -path "*build/outputs*" -maxdepth 8 -print | head -50
-          if [ -z "$(find android -name '*.apk' -type f)" ]; then
+          ./gradlew --version
+          ./gradlew projects --console=plain || true
+          ./gradlew :app:assembleDebug --stacktrace --no-daemon --no-build-cache --console=plain \
+            || ./gradlew assembleDebug --stacktrace --no-daemon --no-build-cache --console=plain
+
+      # Searches the whole workspace (Gradle may use a custom build dir)
+      # and copies every APK into one predictable folder.
+      - name: Collect APK
+        run: |
+          mkdir -p apk-out
+          i=0
+          while IFS= read -r f; do
+            i=$((i+1))
+            echo "Found APK: $f"
+            cp "$f" "apk-out/$(basename "$f" .apk)-$i.apk"
+          done < <(find "$GITHUB_WORKSPACE" -name '*.apk' -type f \
+                     -not -path '*/node_modules/*' -not -path '*/apk-out/*')
+          if [ "$i" -eq 0 ]; then
             echo "::error::Gradle finished but produced no .apk file"
+            echo "--- android/app ---"
+            ls -la android/app || true
+            echo "--- any build folders ---"
+            find android -type d -name build -not -path '*/node_modules/*' | head -20
+            echo "--- assemble tasks ---"
+            (cd android && ./gradlew :app:tasks --all --console=plain | grep -i assemble) || true
             exit 1
           fi
+          ls -la apk-out
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          path: android/**/outputs/apk/**/*.apk
+          path: apk-out/*.apk
           if-no-files-found: error
