@@ -154,6 +154,7 @@ jobs:
                || ! grep -q "GradleWrapperMain" android/gradlew; then
               echo "Gradle wrapper missing or invalid, regenerating it"
               rm -rf /tmp/gw && mkdir -p /tmp/gw
+              : > /tmp/gw/settings.gradle
               (cd /tmp/gw && gradle wrapper --gradle-version 8.11.1 --no-daemon)
               mkdir -p android/gradle
               cp -r /tmp/gw/gradle/. android/gradle/
@@ -162,12 +163,33 @@ jobs:
             chmod +x android/gradlew
           }
 
+          # Kotlin 1.8+ stdlib already contains the jdk7/jdk8 classes, so old
+          # kotlin-stdlib-jdk7/jdk8 (1.6.x) pulled in by plugins cause
+          # "Duplicate class kotlin.collections.jdk8..." errors. Exclude them.
+          patch_gradle() {
+            F=android/build.gradle
+            if [ -f "$F" ] && ! grep -q "CI-kotlin-dedupe" "$F"; then
+              echo "Patching $F to exclude duplicate Kotlin jdk7/jdk8 stdlibs"
+              cat >> "$F" <<'GRADLE'
+
+          // CI-kotlin-dedupe
+          allprojects {
+              configurations.configureEach {
+                  exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
+                  exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
+              }
+          }
+          GRADLE
+            fi
+          }
+
           have_apk() {
             [ -n "$(find android -name '*.apk' -type f 2>/dev/null)" ]
           }
 
           build() {
             fix_wrapper
+            patch_gradle
             (cd android && ./gradlew --version)
             (cd android && ./gradlew :app:assembleDebug --stacktrace --no-daemon --no-build-cache --console=plain) \
               || (cd android && ./gradlew assembleDebug --stacktrace --no-daemon --no-build-cache --console=plain)
