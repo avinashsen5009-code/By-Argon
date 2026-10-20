@@ -24,10 +24,50 @@ export interface VideoSinkPluginInterface {
   closeSink(options: { sessionId: string; mimeType: string }): Promise<{ uri: string; size: number }>;
 }
 
-export const NativeVideoSink = registerPlugin<VideoSinkPluginInterface>('VideoSink');
+const capacitorVideoSink = registerPlugin<VideoSinkPluginInterface>('VideoSink');
+
+function invokeNativeBridge<T>(methodName: keyof VideoSinkPluginInterface, options: Record<string, unknown> = {}): Promise<T> {
+  const win = typeof window !== 'undefined' ? (window as unknown as Record<string, any>) : null;
+  if (win && win.RecipeStudioNativeBridge && typeof win.RecipeStudioNativeBridge.invoke === 'function') {
+    return new Promise<T>((resolve, reject) => {
+      try {
+        const raw = win.RecipeStudioNativeBridge.invoke('VideoSink', String(methodName), JSON.stringify(options));
+        const parsed = JSON.parse(raw || '{}');
+        if (parsed && parsed.error) {
+          reject(new Error(parsed.error));
+        } else {
+          resolve(parsed as T);
+        }
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+  const fn = capacitorVideoSink[methodName] as (opts: any) => Promise<T>;
+  return fn(options);
+}
+
+export const NativeVideoSink: VideoSinkPluginInterface = {
+  open: (opts) => invokeNativeBridge('open', opts),
+  write: (opts) => invokeNativeBridge('write', opts),
+  close: (opts) => invokeNativeBridge('close', opts),
+  saveToMovies: (opts) => invokeNativeBridge('saveToMovies', opts),
+  startForeground: (opts) => invokeNativeBridge('startForeground', opts),
+  updateForeground: (opts) => invokeNativeBridge('updateForeground', opts),
+  stopForeground: () => invokeNativeBridge('stopForeground', {}),
+  freeSpace: () => invokeNativeBridge('freeSpace', {}),
+  share: (opts) => invokeNativeBridge('share', opts),
+  openUri: (opts) => invokeNativeBridge('openUri', opts),
+  openSink: (opts) => invokeNativeBridge('openSink', opts),
+  writeChunk: (opts) => invokeNativeBridge('writeChunk', opts),
+  closeSink: (opts) => invokeNativeBridge('closeSink', opts),
+};
 
 export function isNativeAndroid(): boolean {
   try {
+    if (typeof window !== 'undefined' && (window as any).RecipeStudioNativeBridge) {
+      return true;
+    }
     return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
   } catch {
     return false;
