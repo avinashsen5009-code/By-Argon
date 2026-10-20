@@ -24,9 +24,12 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      # Installs a real Gradle on PATH so the wrapper can be regenerated
+      # if the project's gradlew / wrapper jar is missing or empty.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
+          gradle-version: 8.11.1
           cache-disabled: true
 
       # The action's default package list is "tools platform-tools".
@@ -129,24 +132,58 @@ jobs:
 
       - name: Show Android project layout
         run: |
-          echo "--- android/ top level ---"
-          ls -la android
+          echo "--- android/ ---"
+          ls -la android || true
+          echo "--- gradlew size / wrapper ---"
+          wc -c android/gradlew || true
+          ls -la android/gradle/wrapper || true
           echo "--- settings.gradle ---"
           cat android/settings.gradle* 2>/dev/null || true
-          echo "--- variables.gradle ---"
-          cat android/variables.gradle 2>/dev/null || true
 
-      - name: Make gradlew executable
-        run: chmod +x android/gradlew
-
-      # Builds the app module explicitly and falls back to the generic task.
+      # 1) Repairs the Gradle wrapper if it is missing/empty.
+      # 2) Builds :app:assembleDebug (falls back to assembleDebug).
+      # 3) If no APK appears, regenerates the android project from scratch
+      #    with `cap add android` and builds again.
       - name: Build debug APK
-        working-directory: android
         run: |
-          ./gradlew --version
-          ./gradlew projects --console=plain || true
-          ./gradlew :app:assembleDebug --stacktrace --no-daemon --no-build-cache --console=plain \
-            || ./gradlew assembleDebug --stacktrace --no-daemon --no-build-cache --console=plain
+          set -o pipefail
+
+          fix_wrapper() {
+            if [ ! -f android/gradle/wrapper/gradle-wrapper.jar ] \
+               || [ ! -s android/gradlew ] \
+               || ! grep -q "GradleWrapperMain" android/gradlew; then
+              echo "Gradle wrapper missing or invalid, regenerating it"
+              rm -rf /tmp/gw && mkdir -p /tmp/gw
+              (cd /tmp/gw && gradle wrapper --gradle-version 8.11.1 --no-daemon)
+              mkdir -p android/gradle
+              cp -r /tmp/gw/gradle/. android/gradle/
+              cp /tmp/gw/gradlew /tmp/gw/gradlew.bat android/
+            fi
+            chmod +x android/gradlew
+          }
+
+          have_apk() {
+            [ -n "$(find android -name '*.apk' -type f 2>/dev/null)" ]
+          }
+
+          build() {
+            fix_wrapper
+            (cd android && ./gradlew --version)
+            (cd android && ./gradlew :app:assembleDebug --stacktrace --no-daemon --no-build-cache --console=plain) \
+              || (cd android && ./gradlew assembleDebug --stacktrace --no-daemon --no-build-cache --console=plain)
+          }
+
+          build || echo "First build attempt failed"
+
+          if ! have_apk; then
+            echo "::warning::No APK produced. Regenerating the android project from scratch."
+            rm -rf android
+            npx cap add android
+            npx cap sync android
+            build
+          fi
+
+          have_apk
 
       # Searches the whole workspace (Gradle may use a custom build dir)
       # and copies every APK into one predictable folder.
@@ -162,12 +199,6 @@ jobs:
                      -not -path '*/node_modules/*' -not -path '*/apk-out/*')
           if [ "$i" -eq 0 ]; then
             echo "::error::Gradle finished but produced no .apk file"
-            echo "--- android/app ---"
-            ls -la android/app || true
-            echo "--- any build folders ---"
-            find android -type d -name build -not -path '*/node_modules/*' | head -20
-            echo "--- assemble tasks ---"
-            (cd android && ./gradlew :app:tasks --all --console=plain | grep -i assemble) || true
             exit 1
           fi
           ls -la apk-out
